@@ -1,0 +1,22 @@
+# Ignore raw and processed sequence data
+Data/raw_data/
+Data/processed_data/
+Data/reference_dbs/
+Data/temp/
+
+# Ignore results and intermediate outputs
+Results/
+
+# Ignore logs and checkpoints
+Logs/
+
+# Python/OS/editor junk
+__pycache__/
+*.pyc
+.DS_Store
+
+# Ignore QIIME artifacts if you don't want them in Git
+*.qza
+*.qzv
+
+# Keep templates and small config files tracked (Config/ is intentionally kept)

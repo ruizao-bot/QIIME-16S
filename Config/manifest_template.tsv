@@ -1,0 +1,7 @@
+# QIIME2 manifest template (paired-end, Phred33 V2)
+# Columns: sample-id,absolute-filepath,direction
+# Replace /full/path/to/... with the actual absolute paths (or relative paths if you prefer)
+sample-id,absolute-filepath,direction
+# Example:
+# A16,/path/to/A16_R1.fastq.gz,forward
+# A16,/path/to/A16_R2.fastq.gz,reverse

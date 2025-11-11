@@ -1,0 +1,7 @@
+# Pipeline configuration template
+# You can edit these defaults or supply equivalents as CLI args when running Scripts/main.sh
+env_name: qiime
+mode: denoise
+trunc_len_f: 250
+trunc_len_r: 250
+n_threads: 0
