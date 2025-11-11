@@ -1,14 +1,20 @@
 # Ignore raw and processed sequence data (files only, not folders)
 Data/raw_data/*
+!Data/raw_data/.gitkeep
 Data/processed_data/*
+!Data/processed_data/.gitkeep
 Data/reference_dbs/*
+!Data/reference_dbs/.gitkeep
 Data/temp/*
+!Data/temp/.gitkeep
 
 # Ignore results and intermediate outputs (files only, not folders)
 Results/*
+!Results/.gitkeep
 
 # Ignore logs and checkpoints (files only, not folders)
 Logs/*
+!Logs/.gitkeep
 
 # Python/OS/editor junk
 __pycache__/
