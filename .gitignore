@@ -1,14 +1,14 @@
-# Ignore raw and processed sequence data
-Data/raw_data/
-Data/processed_data/
-Data/reference_dbs/
-Data/temp/
+# Ignore raw and processed sequence data (files only, not folders)
+Data/raw_data/*
+Data/processed_data/*
+Data/reference_dbs/*
+Data/temp/*
 
-# Ignore results and intermediate outputs
-Results/
+# Ignore results and intermediate outputs (files only, not folders)
+Results/*
 
-# Ignore logs and checkpoints
-Logs/
+# Ignore logs and checkpoints (files only, not folders)
+Logs/*
 
 # Python/OS/editor junk
 __pycache__/
