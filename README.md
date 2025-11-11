@@ -11,8 +11,7 @@ QIIME/
 ├── Data/
 │   ├── raw_data/             # Original FASTQ files and manifest.tsv
 │   ├── processed_data/       # Imported QIIME2 artifacts (demux, trimmed .qza/.qzv)
-│   ├── reference_dbs/        # Pre-trained classifiers and reference artifacts (.qza)
-│   └── metadata/             # Optional: sample metadata TSV(s) for group comparison
+│   └── reference_dbs/        # Pre-trained classifiers and reference artifacts (.qza)
 ├── Scripts/
 │   └── main.sh               # Main pipeline (run this script)
 ├── Results/
@@ -86,22 +85,13 @@ This pipeline is split into six interactive steps. Below is a short plain-langua
 These explanations should help you decide which steps to run or re-run, and what inputs are required for each.
 ## Usage
 
-## Prerequisites
-
-Before using this pipeline, ensure you have:This pipeline automates microbiome data analysis using QIIME2. It identifies and visualizes bacteria and other microorganisms in your samples through a simple, step-by-step process.## 📚 What is This?This repository contains a QIIME2 amplicon/metagenomic analysis pipeline with an opinionated directory layout and a checkpointing wrapper script at `Scripts/main.sh`.
-
-- Git installed on your computer
-
-- Basic familiarity with Terminal/Command Line
-
-
 ### Clone the Repository
 
 Open Terminal and navigate to where you want to store the pipeline, then clone:
 
 git clone https://github.com/ruizao-bot/QIIME-16S.git
 
-## Running guidance
+### Running guidance
 Run the script from the project root (recommended) or let the script change to the project root if you modify it accordingly. Example invocations:
 
 # Run interactively (will prompt for choices)
@@ -131,15 +121,3 @@ Options supported by the script include:
 - `-d, --delete-intermediate` — interactively delete intermediate files produced by primer removal and DADA2
 - `-m, --mode <denoise|cluster>` — pipeline mode
 - `-e, --env <envname>` — conda environment name to use
-
-## Metadata usage
-
-If you want group-aware visualizations (taxa bar plots, group-based diversity tests), create a metadata TSV and use it with QIIME2 commands such as `qiime taxa barplot`:
-
-```bash
-qiime taxa barplot \
-    --i-table Results/denoise_mode/table.qza \
-    --i-taxonomy Results/denoise_mode/taxonomy.qza \
-    --m-metadata-file Data/metadata/sample-metadata.tsv \
-    --o-visualization Results/denoise_mode/taxa-bar-plots.qzv
-```
