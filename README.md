@@ -88,28 +88,35 @@ These explanations should help you decide which steps to run or re-run, and what
 ### Clone the Repository
 
 Open Terminal and navigate to where you want to store the pipeline, then clone:
-
+```
 git clone https://github.com/ruizao-bot/QIIME-16S.git
-
+```
 ### Running guidance
+
 Run the script from the project root (recommended) or let the script change to the project root if you modify it accordingly. Example invocations:
 
-# Run interactively (will prompt for choices)
+#### Run interactively (will prompt for choices)
+```
 bash Scripts/main.sh
-
-# Run in cluster mode
+```
+#### Run in cluster mode
+```
 bash Scripts/main.sh -m cluster
-
-# Show pipeline status (which steps completed)
+```
+#### Show pipeline status (which steps completed)
+```
 bash Scripts/main.sh --status
-
-# Remove a specific checkpoint so a step will run again
+```
+#### Remove a specific checkpoint so a step will run again
+```
 bash Scripts/main.sh --remove 5
-
-# Delete intermediate outputs from primer removal and denoising (interactive confirmation)
+```
+#### Delete intermediate outputs from primer removal and denoising (interactive confirmation)
+```
 bash Scripts/main.sh --delete-intermediate
-
-# Remove all checkpoints and log file (start fresh)
+```
+#### Remove all checkpoints and log file (start fresh)
+```
 bash Scripts/main.sh --clean
 ```
 
