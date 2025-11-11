@@ -594,12 +594,26 @@ step6_taxonomic_classification() {
         error_exit "Required files not found. Please run step 5 first."
     fi
     
-    # Check for classifier
+    # Check for classifier (detect but always ask user whether to use it)
     CLASSIFIER_PATH=""
     if [[ -f "Data/reference_dbs/classifier.qza" ]]; then
         CLASSIFIER_PATH="Data/reference_dbs/classifier.qza"
     elif [[ -f "classifier.qza" ]]; then
         CLASSIFIER_PATH="classifier.qza"
+    fi
+
+    # If a classifier was found, ask the user whether to use it or choose other options
+    if [[ -n "${CLASSIFIER_PATH}" ]]; then
+        echo ""
+        echo "Detected existing classifier: ${CLASSIFIER_PATH}"
+        read -p "Use this classifier? (y = use it / n = show options to build/download/choose another) [Y/n]: " USE_FOUND
+        USE_FOUND=${USE_FOUND:-Y}
+        if [[ "${USE_FOUND}" =~ ^[Yy]$ ]]; then
+            log "Using detected classifier: ${CLASSIFIER_PATH}"
+        else
+            # Clear so the interactive menu below is shown
+            CLASSIFIER_PATH=""
+        fi
     fi
     
     if [[ -z "${CLASSIFIER_PATH}" ]]; then
@@ -628,53 +642,72 @@ step6_taxonomic_classification() {
                 ;;
             2)
                 echo ""
-                echo "To build a custom classifier, you need:"
-                echo "1. Reference sequences (e.g., silva-138-99-seqs.qza)"
-                echo "2. Taxonomy file (e.g., silva-138-99-tax.qza)"
+                echo "Building a custom classifier using RESCRIPt and SILVA."
+                echo "This will download, filter, extract, and train automatically."
                 echo ""
-                echo "You can download these from:"
-                echo "https://docs.qiime2.org/2024.10/data-resources/"
-                echo ""
-                
-                read -p "Enter path to reference sequences (.qza): " REF_SEQS
-                read -p "Enter path to taxonomy file (.qza): " REF_TAX
-                
-                if [[ ! -f "${REF_SEQS}" ]]; then
-                    error_exit "Reference sequences not found: ${REF_SEQS}"
+                # Check for RESCRIPt installation and offer interactive install into the active env
+                if ! qiime rescript --help &> /dev/null; then
+                    echo ""
+                    echo "RESCRIPt plugin is not installed in the active environment: ${ENV_NAME}"
+                    read -p "Would you like to attempt to install RESCRIPt into '${ENV_NAME}' now? (y/n): " INSTALL_RESCRIPT
+                    if [[ "${INSTALL_RESCRIPT}" =~ ^[Yy]$ ]]; then
+                        log "Attempting to install RESCRIPt into environment: ${ENV_NAME}"
+                        # Try installing into the named environment. Use -n so it works whether or not env is active.
+                        if ! conda install -n "${ENV_NAME}" -c conda-forge -c bioconda qiime2-rescript -y; then
+                            log "Automatic installation failed. Please install manually with: conda activate ${ENV_NAME} && conda install -c conda-forge -c bioconda qiime2-rescript"
+                            error_exit "Automatic RESCRIPt installation failed"
+                        fi
+                        # Reactivate environment to ensure new plugins are available
+                        source "$(conda info --base)/etc/profile.d/conda.sh"
+                        conda activate "${ENV_NAME}" || error_exit "Failed to reactivate environment after installing RESCRIPt"
+                        if ! qiime rescript --help &> /dev/null; then
+                            error_exit "RESCRIPt still not available after installation. Please check conda output or install manually in '${ENV_NAME}'."
+                        fi
+                        log "RESCRIPt successfully installed and available in '${ENV_NAME}'"
+                    else
+                        error_exit "RESCRIPt plugin is required to build a classifier with RESCRIPt. Install it in '${ENV_NAME}' and re-run the script."
+                    fi
                 fi
-                if [[ ! -f "${REF_TAX}" ]]; then
-                    error_exit "Taxonomy file not found: ${REF_TAX}"
-                fi
-                
+                mkdir -p Data/reference_dbs
+                log "Downloading SILVA reference data (this may take several minutes)..."
+                # Recent RESCRIPt versions use --o-silva-sequences and --o-silva-taxonomy
+                qiime rescript get-silva-data \
+                    --p-version '138.1' \
+                    --p-target 'SSURef_NR99' \
+                    --o-silva-sequences Data/reference_dbs/silva-seqs.qza \
+                    --o-silva-taxonomy Data/reference_dbs/silva-tax.qza || error_exit "Failed to download SILVA data"
+                log "Culling low-quality sequences..."
+                qiime rescript cull-seqs \
+                    --i-sequences Data/reference_dbs/silva-seqs.qza \
+                    --o-clean-sequences Data/reference_dbs/silva-seqs-clean.qza || error_exit "Failed to cull sequences"
+                log "Filtering sequences by length..."
+                qiime rescript filter-seqs-length-by-taxon \
+                    --i-sequences Data/reference_dbs/silva-seqs-clean.qza \
+                    --i-taxonomy Data/reference_dbs/silva-tax.qza \
+                    --p-min-lens 1000 \
+                    --o-filtered-seqs Data/reference_dbs/silva-seqs-filtered.qza || error_exit "Failed to filter sequences by length"
                 echo ""
                 echo "Do you want to extract a specific region using primers?"
                 echo "This is recommended if you used specific primers (e.g., 515F/806R)"
                 read -p "Extract primers? (y/n): " EXTRACT_PRIMERS
-                
                 if [[ "${EXTRACT_PRIMERS}" =~ ^[Yy]$ ]]; then
                     read -p "Enter forward primer sequence: " PRIMER_F
                     read -p "Enter reverse primer sequence: " PRIMER_R
-                    
                     log "Extracting amplicon region from reference sequences..."
                     qiime feature-classifier extract-reads \
-                        --i-sequences "${REF_SEQS}" \
+                        --i-sequences Data/reference_dbs/silva-seqs-filtered.qza \
                         --p-f-primer "${PRIMER_F}" \
                         --p-r-primer "${PRIMER_R}" \
-                        --o-reads Data/reference_dbs/ref-seqs-extracted.qza || \
-                        error_exit "Failed to extract reads"
-                    
-                    REF_SEQS="Data/reference_dbs/ref-seqs-extracted.qza"
-                    log "Using extracted sequences: ${REF_SEQS}"
+                        --o-reads Data/reference_dbs/silva-extracted.qza || error_exit "Failed to extract reads"
+                    REF_SEQS="Data/reference_dbs/silva-extracted.qza"
+                else
+                    REF_SEQS="Data/reference_dbs/silva-seqs-filtered.qza"
                 fi
-                
                 log "Training classifier (this may take 30+ minutes)..."
-                mkdir -p Data/reference_dbs
                 qiime feature-classifier fit-classifier-naive-bayes \
                     --i-reference-reads "${REF_SEQS}" \
-                    --i-reference-taxonomy "${REF_TAX}" \
-                    --o-classifier Data/reference_dbs/custom-classifier.qza || \
-                    error_exit "Classifier training failed"
-                
+                    --i-reference-taxonomy Data/reference_dbs/silva-tax.qza \
+                    --o-classifier Data/reference_dbs/custom-classifier.qza || error_exit "Classifier training failed"
                 CLASSIFIER_PATH="Data/reference_dbs/custom-classifier.qza"
                 log "Custom classifier created: ${CLASSIFIER_PATH}"
                 ;;
@@ -919,7 +952,8 @@ usage() {
     echo "  $0                 Run the pipeline (resume from last checkpoint)"
     echo "  $0 --clean         Start the pipeline from scratch"
     echo "  $0 --status        Check which steps have been completed"
-    echo "  $0 -r step5_dada2_denoising  Remove checkpoint for step 5"
+    echo "  $0 -r 5            Remove checkpoint(s) for step 5 (both denoise/cluster variants)"
+    echo "  $0 -r 6            Remove checkpoint for step 6"
     echo "  $0 -d              Delete intermediate outputs and re-run step 4/5"
     echo "  $0 -e myqiime      Use conda environment named 'myqiime'"
     echo "  $0 -m cluster -e qiime2-amplicon  Use cluster mode with custom environment"
@@ -1081,11 +1115,42 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--remove)
             if [[ -n "${2:-}" ]]; then
-                remove_checkpoint "$2"
-                exit 0
+                arg="$2"
+                case "${arg}" in
+                    [1-6])
+                        case "${arg}" in
+                            1)
+                                remove_checkpoint "step1_environment_setup"
+                                ;;
+                            2)
+                                remove_checkpoint "step2_import_data"
+                                ;;
+                            3)
+                                remove_checkpoint "step3_visualize_demux"
+                                ;;
+                            4)
+                                remove_checkpoint "step4_remove_primers"
+                                ;;
+                            5)
+                                # Step 5 has two possible checkpoints depending on mode; remove both
+                                remove_checkpoint "step5_dada2_denoising"
+                                remove_checkpoint "step5_cluster_from_demux"
+                                ;;
+                            6)
+                                remove_checkpoint "step6_taxonomic_classification"
+                                ;;
+                        esac
+                        exit 0
+                        ;;
+                    *)
+                        # Accept explicit checkpoint name as before
+                        remove_checkpoint "${arg}"
+                        exit 0
+                        ;;
+                esac
             else
-                echo "Error: --remove requires an argument (checkpoint name)"
-                echo "Example: $0 --remove step4_dada2_denoising"
+                echo "Error: --remove requires an argument (checkpoint number 1-6 or checkpoint name)"
+                echo "Example: $0 --remove 6"
                 exit 1
             fi
             ;;

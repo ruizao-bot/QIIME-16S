@@ -2,6 +2,7 @@
 
 This repository contains a QIIME2 amplicon/metagenomic analysis pipeline with an opinionated directory layout and a checkpointing wrapper script at `Scripts/main.sh`.
 
+
 ## Directory structure (recommended)
 
 ```
@@ -43,9 +44,24 @@ QIIME/
 
 ## Usage
 
+## Prerequisites
+
+Before using this pipeline, ensure you have:This pipeline automates microbiome data analysis using QIIME2. It identifies and visualizes bacteria and other microorganisms in your samples through a simple, step-by-step process.## 📚 What is This?This repository contains a QIIME2 amplicon/metagenomic analysis pipeline with an opinionated directory layout and a checkpointing wrapper script at `Scripts/main.sh`.
+
+- Git installed on your computer
+
+- Basic familiarity with Terminal/Command Line
+
+
+### Clone the Repository
+
+Open Terminal and navigate to where you want to store the pipeline, then clone:
+
+git clone https://github.com/ruizao-bot/QIIME-16S.git
+
+## Running guidance
 Run the script from the project root (recommended) or let the script change to the project root if you modify it accordingly. Example invocations:
 
-```bash
 # Run interactively (will prompt for choices)
 bash Scripts/main.sh
 
@@ -56,7 +72,7 @@ bash Scripts/main.sh -m cluster
 bash Scripts/main.sh --status
 
 # Remove a specific checkpoint so a step will run again
-bash Scripts/main.sh --remove step5_dada2_denoising
+bash Scripts/main.sh --remove 5
 
 # Delete intermediate outputs from primer removal and denoising (interactive confirmation)
 bash Scripts/main.sh --delete-intermediate
@@ -74,15 +90,6 @@ Options supported by the script include:
 - `-m, --mode <denoise|cluster>` — pipeline mode
 - `-e, --env <envname>` — conda environment name to use
 
-## Typical file flow
-
-```
-Data/raw_data/manifest.tsv -> Scripts/main.sh (import) -> Data/processed_data/demux-paired-end.qza
-                                                         -> (visualize) -> Data/processed_data/demux-paired-end.qzv
-                                                         -> (trim primers) -> Data/processed_data/demux-trimmed.qza
-                                                         -> (denoise/cluster) -> Results/[mode]/table.qza, rep-seqs.qza, *.qzv
-```
-
 ## Metadata usage
 
 If you want group-aware visualizations (taxa bar plots, group-based diversity tests), create a metadata TSV and use it with QIIME2 commands such as `qiime taxa barplot`:
@@ -94,11 +101,3 @@ qiime taxa barplot \
     --m-metadata-file Data/metadata/sample-metadata.tsv \
     --o-visualization Results/denoise_mode/taxa-bar-plots.qzv
 ```
-
-## Suggested next steps
-
-- Ensure the `Data/` and `Results/` folders exist before running (or modify `Scripts/main.sh` to `cd` to project root and create them automatically).
-- Add any download/training steps for reference classifiers under `Data/reference_dbs/`.
-- Add your sample metadata (if needed) at `Data/metadata/sample-metadata.tsv` and use it with taxa barplots and diversity commands.
-
-If you'd like, I can update `Scripts/main.sh` to automatically `cd` to the project root and create the common folders at startup — say the word and I'll apply that change and run a quick syntax check.
