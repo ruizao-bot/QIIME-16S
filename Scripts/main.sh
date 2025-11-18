@@ -789,9 +789,9 @@ PYTHON_SCRIPT
     esac
 }
 
-# Step 7 Alternative: Build OTU table and rep-seqs directly from demux
-step7_cluster_from_demux() {
-    if check_checkpoint "step7_cluster_from_demux"; then
+# Step 5 Alternative: Build OTU table and rep-seqs directly from demux (cluster mode)
+step5_cluster_from_demux() {
+    if check_checkpoint "step5_cluster_from_demux"; then
         return 0
     fi
 
@@ -1305,7 +1305,7 @@ main() {
         if [[ "${MODE}" == "denoise" ]]; then
             step5_dada2_denoising
         elif [[ "${MODE}" == "cluster" ]]; then
-            step7_cluster_from_demux
+            step5_cluster_from_demux
         else
             error_exit "Unknown mode: ${MODE}. Supported: denoise, cluster"
         fi
@@ -1412,7 +1412,7 @@ usage() {
     echo "  - step3_visualize_demux"
     echo "  - step4_remove_primers"
     echo "  - step5_dada2_denoising"
-    echo "  - step7_cluster_from_demux"
+    echo "  - step5_cluster_from_demux"
     echo "  - step6_decontamination"
     echo "  - step8_taxonomic_classification"
 }
@@ -1422,7 +1422,7 @@ show_status() {
     echo "Pipeline Status:"
     echo "================"
     
-    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step7_cluster_from_demux" "step6_decontamination" "step8_taxonomic_classification")
+    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step5_cluster_from_demux" "step6_decontamination" "step8_taxonomic_classification")
     local step_names=("Step 1: Environment Setup" "Step 2: Import Data" "Step 3: Visualize Demux" "Step 4: Remove Primers" "Step 5: DADA2 Denoising" "Step 5: Cluster from Demux" "Step 6: Decontamination" "Step 7: Taxonomic Classification")
     
     for i in "${!steps[@]}"; do
@@ -1582,7 +1582,7 @@ while [[ $# -gt 0 ]]; do
                                 ;;
                             5)
                                 remove_checkpoint "step5_dada2_denoising"
-                                remove_checkpoint "step7_cluster_from_demux"
+                                remove_checkpoint "step5_cluster_from_demux"
                                 ;;
                             6)
                                 remove_checkpoint "step6_decontamination"
