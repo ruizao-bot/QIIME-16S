@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 # QIIME2 Pipeline with Checkpoint System
@@ -13,6 +12,9 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHECKPOINT_DIR="${PROJECT_DIR}/Logs/checkpoints"
 LOG_FILE="${PROJECT_DIR}/Logs/qiime2_pipeline.log"
 ENV_NAME="qiime"
+# Non-interactive / batch mode for HPC (Slurm) runs. When true, prompts are skipped
+# and environment variables or sensible defaults are used instead.
+NON_INTERACTIVE="false"
 # Mode: 'denoise' (DADA2) or 'cluster' (OTU clustering from demux)
 # Users can override with -m|--mode when running the script
 MODE="denoise"
@@ -60,7 +62,12 @@ pause_script() {
     echo "Checkpoint saved at: ${CHECKPOINT_DIR}/${step_name}.checkpoint"
     echo "=================================================="
     echo "${message}"
-    read -r
+    # In non-interactive mode (batch), do not wait for user input
+    if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        log "Non-interactive mode: continuing without pause"
+    else
+        read -r
+    fi
 }
 
 # Step 1: Environment Setup
@@ -253,7 +260,15 @@ step4_remove_primers() {
     echo "2) Custom primers (you will enter them)"
     echo "3) Skip primer removal (already removed or not needed)"
     echo ""
-    read -p "Enter choice (1-3): " PRIMER_CHOICE
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${PRIMER_CHOICE:-}" ]]; then
+        log "Non-interactive: using PRIMER_CHOICE=${PRIMER_CHOICE}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        # default: skip primer removal in batch mode unless PRIMER_CHOICE is provided
+        PRIMER_CHOICE=3
+        log "Non-interactive: default PRIMER_CHOICE=3 (skip primer removal)"
+    else
+        read -p "Enter choice (1-3): " PRIMER_CHOICE
+    fi
     
     case ${PRIMER_CHOICE} in
         1)
@@ -360,9 +375,24 @@ step5_dada2_denoising() {
     # Get truncation lengths from user
     echo ""
     echo "Based on the quality plots from Data/processed_data/demux-paired-end.qzv:"
-    read -p "Enter forward truncation length (default: 250): " TRUNC_LEN_F
-    read -p "Enter reverse truncation length (default: 250): " TRUNC_LEN_R
-    
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${TRUNC_LEN_F:-}" ]]; then
+        log "Non-interactive: using TRUNC_LEN_F=${TRUNC_LEN_F}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        TRUNC_LEN_F=250
+        log "Non-interactive: default TRUNC_LEN_F=${TRUNC_LEN_F}"
+    else
+        read -p "Enter forward truncation length (default: 250): " TRUNC_LEN_F
+    fi
+
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${TRUNC_LEN_R:-}" ]]; then
+        log "Non-interactive: using TRUNC_LEN_R=${TRUNC_LEN_R}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        TRUNC_LEN_R=250
+        log "Non-interactive: default TRUNC_LEN_R=${TRUNC_LEN_R}"
+    else
+        read -p "Enter reverse truncation length (default: 250): " TRUNC_LEN_R
+    fi
+
     TRUNC_LEN_F=${TRUNC_LEN_F:-250}
     TRUNC_LEN_R=${TRUNC_LEN_R:-250}
     
@@ -371,8 +401,15 @@ step5_dada2_denoising() {
     # Get number of threads to use
     echo ""
     echo "DADA2 can use multiple CPU cores to speed up processing."
-    read -p "Enter number of threads (0 = all available, default: 0): " N_THREADS
-    N_THREADS=${N_THREADS:-0}
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${N_THREADS:-}" ]]; then
+        log "Non-interactive: using N_THREADS=${N_THREADS}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        N_THREADS=0
+        log "Non-interactive: default N_THREADS=0 (all available)"
+    else
+        read -p "Enter number of threads (0 = all available, default: 0): " N_THREADS
+        N_THREADS=${N_THREADS:-0}
+    fi
     
     log "Using ${N_THREADS} threads (0 = all available cores)"
     
@@ -440,9 +477,321 @@ step5_dada2_denoising() {
     pause_script "DADA2 Denoising" "DADA2 processing completed. Review the .qzv files at https://view.qiime2.org before proceeding."
 }
 
-# Step 5 Alternative: Build OTU table and rep-seqs directly from demux
-step5_cluster_from_demux() {
-    if check_checkpoint "step5_cluster_from_demux"; then
+# Step 6: Decontamination
+step6_decontamination() {
+    if check_checkpoint "step6_decontamination"; then
+        return 0
+    fi
+
+    log "Starting Step 6: Decontamination"
+
+    # Ensure environment is activated
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${ENV_NAME}" || error_exit "Failed to activate QIIME2 environment"
+
+    # Determine which mode we're in and set paths
+    if [[ "${MODE}" == "denoise" ]]; then
+        TABLE_PATH="Results/denoise_mode/table.qza"
+        REP_SEQS_PATH="Results/denoise_mode/rep-seqs.qza"
+        OUTPUT_DIR="Results/denoise_mode"
+    elif [[ "${MODE}" == "cluster" ]]; then
+        TABLE_PATH="Results/cluster_mode/table.qza"
+        REP_SEQS_PATH="Results/cluster_mode/rep-seqs.qza"
+        OUTPUT_DIR="Results/cluster_mode"
+    else
+        error_exit "Unknown mode: ${MODE}"
+    fi
+
+    # Check if required files exist
+    if [[ ! -f "${TABLE_PATH}" ]]; then
+        error_exit "Feature table not found. Please run step 5 first."
+    fi
+
+    echo ""
+    echo "=================================================="
+    echo "Decontamination Step"
+    echo "=================================================="
+    echo ""
+    echo "Do you want to perform decontamination to remove negative controls?"
+    echo "1) Yes"
+    echo "2) No (skip decontamination)"
+    echo ""
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${DECONTAMINATION_CHOICE:-}" ]]; then
+        log "Non-interactive: using DECONTAMINATION_CHOICE=${DECONTAMINATION_CHOICE}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        DECONTAMINATION_CHOICE=2
+        log "Non-interactive: default DECONTAMINATION_CHOICE=2 (skip decontamination)"
+    else
+        read -p "Enter choice (1-2): " DECONTAMINATION_CHOICE
+    fi
+
+    case ${DECONTAMINATION_CHOICE} in
+        1)
+            # Non-interactive: the pipeline no longer prompts for example IDs or generates metadata automatically.
+            # Instead, the user must provide a prepared metadata file with a 'sample-id' column and a
+            # 'control_status' column (values: 'control' or 'not_control').
+            
+            # Priority for metadata file:
+            # 1) Environment variable DECONTAM_METADATA (full path)
+            # 2) Data/metadata/decontam-metadata.tsv
+            # 3) Data/metadata/metadata.tsv
+            
+            if [[ -n "${DECONTAM_METADATA:-}" && -f "${DECONTAM_METADATA}" ]]; then
+                META_FILE="${DECONTAM_METADATA}"
+                log "Using metadata from DECONTAM_METADATA=${META_FILE}"
+            elif [[ -f "Data/metadata/decontam-metadata.tsv" ]]; then
+                META_FILE="Data/metadata/decontam-metadata.tsv"
+                log "Using metadata from Data/metadata/decontam-metadata.tsv"
+            elif [[ -f "Data/metadata/metadata.tsv" ]]; then
+                META_FILE="Data/metadata/metadata.tsv"
+                log "Using metadata from Data/metadata/metadata.tsv"
+            else
+                log "No decontamination metadata file found. Please provide one via DECONTAM_METADATA or place Data/metadata/decontam-metadata.tsv"
+                log "Skipping decontamination step."
+                create_checkpoint "step6_decontamination"
+            fi
+
+            if [[ -n "${META_FILE:-}" ]]; then
+                log "Running decontam identification with prevalence method..."
+                qiime quality-control decontam-identify \
+                    --i-table "${TABLE_PATH}" \
+                    --m-metadata-file "${META_FILE}" \
+                    --p-method prevalence \
+                    --p-prev-control-column control_status \
+                    --p-prev-control-indicator control \
+                    --o-decontam-scores "${OUTPUT_DIR}/decontam-scores.qza" || \
+                    error_exit "Decontam identification failed"
+
+                log "Creating visualization of decontam scores..."
+                qiime quality-control decontam-score-viz \
+                    --i-decontam-scores "${OUTPUT_DIR}/decontam-scores.qza" \
+                    --i-table "${TABLE_PATH}" \
+                    --o-visualization "${OUTPUT_DIR}/decontam-scores.qzv" || \
+                    error_exit "Decontam visualization failed"
+
+                log "Exporting decontam scores to TSV format..."
+                mkdir -p "${OUTPUT_DIR}/decontam_scores_export"
+                qiime tools export \
+                    --input-path "${OUTPUT_DIR}/decontam-scores.qza" \
+                    --output-path "${OUTPUT_DIR}/decontam_scores_export" || \
+                    error_exit "Failed to export decontam scores"
+
+                # Find the actual scores file (QIIME2 may name it differently)
+                SCORES_FILE=$(find "${OUTPUT_DIR}/decontam_scores_export" -name "*.tsv" | head -1)
+                if [[ -z "${SCORES_FILE}" ]]; then
+                    error_exit "No TSV file found after export in ${OUTPUT_DIR}/decontam_scores_export"
+                fi
+                log "Found scores file: ${SCORES_FILE}"
+
+                log "Extracting contaminant feature IDs based on score threshold..."
+                # Get score threshold from user or use default (0.5 for prevalence method)
+                if [[ "${NON_INTERACTIVE}" == "true" && -n "${DECONTAM_THRESHOLD:-}" ]]; then
+                    SCORE_THRESHOLD="${DECONTAM_THRESHOLD}"
+                    log "Non-interactive: using DECONTAM_THRESHOLD=${SCORE_THRESHOLD}"
+                elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                    SCORE_THRESHOLD=0.5
+                    log "Non-interactive: using default SCORE_THRESHOLD=0.5"
+                else
+                    echo ""
+                    echo "The decontam score indicates probability of being a contaminant (0-1)."
+                    echo "Higher scores = more likely to be a contaminant."
+                    echo "Recommended threshold for prevalence method: 0.5"
+                    read -p "Enter score threshold for identifying contaminants (default: 0.5): " SCORE_THRESHOLD
+                    SCORE_THRESHOLD=${SCORE_THRESHOLD:-0.5}
+                fi
+
+                log "Using score threshold: ${SCORE_THRESHOLD}"
+
+                # Debug: show the file structure
+                log "First 10 lines of ${SCORES_FILE}:"
+                head -10 "${SCORES_FILE}" | tee -a "${LOG_FILE}"
+
+                # Extract contaminant feature IDs using Python
+                python3 - "${SCORES_FILE}" "${SCORE_THRESHOLD}" "${OUTPUT_DIR}" << 'PYTHON_SCRIPT'
+import csv
+import sys
+
+scores_file = sys.argv[1]
+threshold = float(sys.argv[2])
+output_dir = sys.argv[3]
+
+contaminant_ids_file = f"{output_dir}/decontam_scores_export/contaminant-ids.txt"
+
+contaminant_ids = []
+try:
+    with open(scores_file, 'r') as f:
+        # Read the file and print column headers for debugging
+        reader = csv.DictReader(f, delimiter='\t')
+        headers = reader.fieldnames
+        print(f"DEBUG: Found columns: {headers}", file=sys.stderr)
+        
+        row_count = 0
+        for row in reader:
+            row_count += 1
+            try:
+                # Print first row for debugging
+                if row_count == 1:
+                    print(f"DEBUG: First row: {row}", file=sys.stderr)
+                
+                # Get the score from column 'p' (decontam p-value)
+                # Also try 'score' and other variations as fallback
+                score = None
+                score_col_found = None
+                
+                for col in ['p', 'score', 'Score', 'p-value', 'p_value', 'decontam score']:
+                    if col in row:
+                        try:
+                            score = float(row[col])
+                            score_col_found = col
+                            break
+                        except ValueError:
+                            pass
+                
+                if row_count == 1 and score is not None:
+                    print(f"DEBUG: Score column: '{score_col_found}', value: {score}", file=sys.stderr)
+                
+                if score is not None and score > threshold:
+                    # Get feature ID from '#OTU ID' or similar
+                    feature_id = None
+                    for col in ['#OTU ID', '#OTU id', 'OTU ID', 'feature-id', 'feature_id', 'id']:
+                        if col in row:
+                            feature_id = row[col]
+                            break
+                    
+                    if feature_id:
+                        contaminant_ids.append(feature_id)
+                        if len(contaminant_ids) <= 3:
+                            print(f"DEBUG: Found contaminant: {feature_id} with score {score}", file=sys.stderr)
+            except Exception as e:
+                if row_count == 1:
+                    print(f"DEBUG: Error processing row 1: {e}", file=sys.stderr)
+                continue
+    
+    print(f"DEBUG: Total rows processed: {row_count}", file=sys.stderr)
+    print(f"DEBUG: Contaminants found: {len(contaminant_ids)}", file=sys.stderr)
+    
+    # Write contaminant IDs to file in metadata format
+    with open(contaminant_ids_file, 'w') as f:
+        f.write('feature-id\n')
+        for fid in contaminant_ids:
+            f.write(f'{fid}\n')
+    
+    print(f"Identified {len(contaminant_ids)} contaminant features with score > {threshold}")
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+PYTHON_SCRIPT
+
+                if [[ ! -f "${OUTPUT_DIR}/decontam_scores_export/contaminant-ids.txt" ]]; then
+                    error_exit "Failed to extract contaminant feature IDs"
+                fi
+
+                # Count contaminants
+                CONTAM_COUNT=$(tail -n +2 "${OUTPUT_DIR}/decontam_scores_export/contaminant-ids.txt" 2>/dev/null | wc -l)
+                log "Identified ${CONTAM_COUNT} contaminant features"
+
+                # Only proceed with filtering if contaminants were found
+                if [[ ${CONTAM_COUNT} -eq 0 ]]; then
+                    log "No contaminants identified with score threshold ${SCORE_THRESHOLD}"
+                    log "Using original table for downstream analysis"
+                    FINAL_TABLE="${TABLE_PATH}"
+                    FINAL_REP_SEQS="${REP_SEQS_PATH}"
+                    FINAL_DESC="Original feature table (no contaminants identified)"
+                else
+                    log "Filtering contaminant features from the table..."
+                    qiime feature-table filter-features \
+                        --i-table "${TABLE_PATH}" \
+                        --m-metadata-file "${OUTPUT_DIR}/decontam_scores_export/contaminant-ids.txt" \
+                        --p-exclude-ids \
+                        --o-filtered-table "${OUTPUT_DIR}/table-no-contam.qza" || \
+                        error_exit "Failed to filter contaminant features from table"
+
+                    log "Filtering representative sequences to match filtered table..."
+                    qiime feature-table filter-seqs \
+                        --i-data "${REP_SEQS_PATH}" \
+                        --i-table "${OUTPUT_DIR}/table-no-contam.qza" \
+                        --o-filtered-data "${OUTPUT_DIR}/rep-seqs-no-contam.qza" || \
+                        error_exit "Failed to filter representative sequences"
+                    
+                    FINAL_TABLE="${OUTPUT_DIR}/table-no-contam.qza"
+                    FINAL_REP_SEQS="${OUTPUT_DIR}/rep-seqs-no-contam.qza"
+                    FINAL_DESC="Feature table with ${CONTAM_COUNT} contaminant features removed"
+                fi
+
+                # Ask about removing negative control samples
+                echo ""
+                echo "Do you want to remove negative control samples from the analysis?"
+                echo "This is recommended as they were only used for contamination identification."
+                if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                    REMOVE_CONTROLS=${REMOVE_CONTROLS:-y}
+                    log "Non-interactive: REMOVE_CONTROLS=${REMOVE_CONTROLS}"
+                else
+                    read -p "Remove negative controls? (y/n): " REMOVE_CONTROLS
+                    REMOVE_CONTROLS=${REMOVE_CONTROLS:-y}
+                fi
+
+                if [[ "${REMOVE_CONTROLS}" =~ ^[Yy]$ ]]; then
+                    log "Removing negative control samples from the table..."
+                    qiime feature-table filter-samples \
+                        --i-table "${FINAL_TABLE}" \
+                        --m-metadata-file "${META_FILE}" \
+                        --p-where "control_status!='control'" \
+                        --o-filtered-table "${OUTPUT_DIR}/table-clean.qza" || \
+                        error_exit "Failed to remove negative control samples"
+
+                    # Update table path for final output
+                    FINAL_TABLE="${OUTPUT_DIR}/table-clean.qza"
+                    FINAL_DESC="${FINAL_DESC} (negative controls removed)"
+                else
+                    log "Keeping negative control samples in the final table..."
+                fi
+
+                # Verify output files were created
+                for file in "${OUTPUT_DIR}/decontam-scores.qza" "${OUTPUT_DIR}/decontam-scores.qzv" "${FINAL_TABLE}" "${FINAL_REP_SEQS}"; do
+                    if [[ ! -f "${file}" ]]; then
+                        error_exit "Output file ${file} was not created"
+                    fi
+                done
+
+                create_checkpoint "step6_decontamination"
+
+                echo ""
+                echo "=================================================="
+                echo "Decontamination Complete!"
+                echo "=================================================="
+                echo ""
+                echo "Generated files:"
+                echo "1. ${OUTPUT_DIR}/decontam-scores.qza - Decontam scores for each feature"
+                echo "2. ${OUTPUT_DIR}/decontam-scores.qzv - Visualization of decontam scores"
+                echo "3. ${OUTPUT_DIR}/decontam_scores_export/scores.tsv - Decontam scores in TSV format"
+                echo "4. ${OUTPUT_DIR}/decontam_scores_export/contaminant-ids.txt - Identified contaminants"
+                echo "5. ${FINAL_TABLE} - ${FINAL_DESC}"
+                echo "6. ${FINAL_REP_SEQS} - Representative sequences matching filtered table"
+                echo ""
+                echo "Decontamination statistics:"
+                echo "- Score threshold used: ${SCORE_THRESHOLD}"
+                echo "- Contaminant features removed: ${CONTAM_COUNT}"
+                echo ""
+
+                pause_script "Decontamination" "Decontamination completed. Cleaned data ready for taxonomic classification."
+            fi
+            ;;
+        2)
+            log "Skipping decontamination step."
+            create_checkpoint "step6_decontamination"
+            ;;
+        *)
+            log "Invalid choice. Skipping decontamination step."
+            create_checkpoint "step6_decontamination"
+            ;;
+    esac
+}
+
+# Step 7 Alternative: Build OTU table and rep-seqs directly from demux
+step7_cluster_from_demux() {
+    if check_checkpoint "step7_cluster_from_demux"; then
         return 0
     fi
 
@@ -564,13 +913,13 @@ step5_cluster_from_demux() {
     pause_script "Cluster-from-demux" "Clustering-from-demux completed. Outputs in Results/cluster_mode/: table.qza, rep-seqs.qza"
 }
 
-# Step 6: Taxonomic Classification
-step6_taxonomic_classification() {
-    if check_checkpoint "step6_taxonomic_classification"; then
+# Step 8: Taxonomic Classification
+step8_taxonomic_classification() {
+    if check_checkpoint "step8_taxonomic_classification"; then
         return 0
     fi
     
-    log "Starting Step 6: Taxonomic Classification"
+    log "Starting Step 7: Taxonomic Classification"
     
     # Ensure environment is activated
     source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -581,10 +930,32 @@ step6_taxonomic_classification() {
         TABLE_PATH="Results/denoise_mode/table.qza"
         REP_SEQS_PATH="Results/denoise_mode/rep-seqs.qza"
         OUTPUT_DIR="Results/denoise_mode"
+        
+        # Check if decontaminated files exist and prefer them
+        if [[ -f "Results/denoise_mode/table-clean.qza" ]]; then
+            TABLE_PATH="Results/denoise_mode/table-clean.qza"
+            REP_SEQS_PATH="Results/denoise_mode/rep-seqs-no-contam.qza"
+            log "Using decontaminated table and sequences"
+        elif [[ -f "Results/denoise_mode/table-no-contam.qza" ]]; then
+            TABLE_PATH="Results/denoise_mode/table-no-contam.qza"
+            REP_SEQS_PATH="Results/denoise_mode/rep-seqs-no-contam.qza"
+            log "Using contaminant-filtered table and sequences"
+        fi
     elif [[ "${MODE}" == "cluster" ]]; then
         TABLE_PATH="Results/cluster_mode/table.qza"
         REP_SEQS_PATH="Results/cluster_mode/rep-seqs.qza"
         OUTPUT_DIR="Results/cluster_mode"
+        
+        # Check if decontaminated files exist and prefer them
+        if [[ -f "Results/cluster_mode/table-clean.qza" ]]; then
+            TABLE_PATH="Results/cluster_mode/table-clean.qza"
+            REP_SEQS_PATH="Results/cluster_mode/rep-seqs-no-contam.qza"
+            log "Using decontaminated table and sequences"
+        elif [[ -f "Results/cluster_mode/table-no-contam.qza" ]]; then
+            TABLE_PATH="Results/cluster_mode/table-no-contam.qza"
+            REP_SEQS_PATH="Results/cluster_mode/rep-seqs-no-contam.qza"
+            log "Using contaminant-filtered table and sequences"
+        fi
     else
         error_exit "Unknown mode: ${MODE}"
     fi
@@ -606,13 +977,17 @@ step6_taxonomic_classification() {
     if [[ -n "${CLASSIFIER_PATH}" ]]; then
         echo ""
         echo "Detected existing classifier: ${CLASSIFIER_PATH}"
-        read -p "Use this classifier? (y = use it / n = show options to build/download/choose another) [Y/n]: " USE_FOUND
-        USE_FOUND=${USE_FOUND:-Y}
-        if [[ "${USE_FOUND}" =~ ^[Yy]$ ]]; then
-            log "Using detected classifier: ${CLASSIFIER_PATH}"
+        if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+            log "Non-interactive: automatically using detected classifier: ${CLASSIFIER_PATH}"
         else
-            # Clear so the interactive menu below is shown
-            CLASSIFIER_PATH=""
+            read -p "Use this classifier? (y = use it / n = show options to build/download/choose another) [Y/n]: " USE_FOUND
+            USE_FOUND=${USE_FOUND:-Y}
+            if [[ "${USE_FOUND}" =~ ^[Yy]$ ]]; then
+                log "Using detected classifier: ${CLASSIFIER_PATH}"
+            else
+                # Clear so the interactive menu below is shown
+                CLASSIFIER_PATH=""
+            fi
         fi
     fi
     
@@ -630,6 +1005,31 @@ step6_taxonomic_classification() {
         echo ""
         read -p "Enter choice (1-4): " CLASSIFIER_CHOICE
         
+        # In non-interactive mode, allow CLASSIFIER_CHOICE env var or BUILD_CLASSIFIER to control behavior
+        if [[ "${NON_INTERACTIVE}" == "true" && -n "${CLASSIFIER_CHOICE:-}" ]]; then
+            log "Non-interactive: using CLASSIFIER_CHOICE=${CLASSIFIER_CHOICE}"
+        elif [[ "${NON_INTERACTIVE}" == "true" && -n "${BUILD_CLASSIFIER:-}" ]]; then
+            # map BUILD_CLASSIFIER values to numeric choices: silva->2, download->3, skip->4, custom->2 (handled later)
+            case "${BUILD_CLASSIFIER}" in
+                silva|Silva|SILVA)
+                    CLASSIFIER_CHOICE=2
+                    ;;
+                download|pretrained)
+                    CLASSIFIER_CHOICE=3
+                    ;;
+                skip|none)
+                    CLASSIFIER_CHOICE=4
+                    ;;
+                custom)
+                    CLASSIFIER_CHOICE=2
+                    ;;
+                *)
+                    CLASSIFIER_CHOICE=4
+                    ;;
+            esac
+            log "Non-interactive: mapped BUILD_CLASSIFIER=${BUILD_CLASSIFIER} to CLASSIFIER_CHOICE=${CLASSIFIER_CHOICE}"
+        fi
+
         case ${CLASSIFIER_CHOICE} in
             1)
                 read -p "Enter the full path to your classifier file: " USER_CLASSIFIER
@@ -649,7 +1049,13 @@ step6_taxonomic_classification() {
                 if ! qiime rescript --help &> /dev/null; then
                     echo ""
                     echo "RESCRIPt plugin is not installed in the active environment: ${ENV_NAME}"
-                    read -p "Would you like to attempt to install RESCRIPt into '${ENV_NAME}' now? (y/n): " INSTALL_RESCRIPT
+                    if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                        # In batch mode use INSTALL_RESCRIPT env var (yes/no). Default: no.
+                        INSTALL_RESCRIPT=${INSTALL_RESCRIPT:-n}
+                        log "Non-interactive: INSTALL_RESCRIPT=${INSTALL_RESCRIPT}"
+                    else
+                        read -p "Would you like to attempt to install RESCRIPt into '${ENV_NAME}' now? (y/n): " INSTALL_RESCRIPT
+                    fi
                     if [[ "${INSTALL_RESCRIPT}" =~ ^[Yy]$ ]]; then
                         log "Attempting to install RESCRIPt into environment: ${ENV_NAME}"
                         # Try installing into the named environment. Use -n so it works whether or not env is active.
@@ -689,10 +1095,23 @@ step6_taxonomic_classification() {
                 echo ""
                 echo "Do you want to extract a specific region using primers?"
                 echo "This is recommended if you used specific primers (e.g., 515F/806R)"
-                read -p "Extract primers? (y/n): " EXTRACT_PRIMERS
+                if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                    EXTRACT_PRIMERS=${EXTRACT_PRIMERS:-n}
+                    log "Non-interactive: EXTRACT_PRIMERS=${EXTRACT_PRIMERS}"
+                else
+                    read -p "Extract primers? (y/n): " EXTRACT_PRIMERS
+                fi
                 if [[ "${EXTRACT_PRIMERS}" =~ ^[Yy]$ ]]; then
-                    read -p "Enter forward primer sequence: " PRIMER_F
-                    read -p "Enter reverse primer sequence: " PRIMER_R
+                    if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                        # In batch mode require PRIMER_F/PRIMER_R env vars to be set
+                        if [[ -z "${PRIMER_F:-}" || -z "${PRIMER_R:-}" ]]; then
+                            error_exit "Non-interactive: PRIMER_F and PRIMER_R must be set when EXTRACT_PRIMERS=yes"
+                        fi
+                        log "Non-interactive: using primers F=${PRIMER_F} R=${PRIMER_R}"
+                    else
+                        read -p "Enter forward primer sequence: " PRIMER_F
+                        read -p "Enter reverse primer sequence: " PRIMER_R
+                    fi
                     log "Extracting amplicon region from reference sequences..."
                     qiime feature-classifier extract-reads \
                         --i-sequences Data/reference_dbs/silva-seqs-filtered.qza \
@@ -838,24 +1257,31 @@ main() {
     echo "2. Import Data"
     echo "3. Visualize Demux Data"
     echo "4. Remove Primers/Adapters (optional)"
-    echo "5. Denoising or Clustering (mode: ${MODE})"
-    echo "6. Taxonomic Classification"
+    echo "5. Denoising or Clustering (mode: denoise or cluster)"
+    echo "6. Decontamination (optional)"
+    echo "7. Taxonomic Classification"
     echo ""
     echo "You can:"
     echo "- Run all steps: Press Enter"
-    echo "- Run from specific step: Type step number (1-6)"
+    echo "- Run from specific step: Type step number (1-7)"
     echo "- Exit: Ctrl+C"
     echo ""
     if [[ -z "${START_STEP:-}" ]]; then
-        read -p "Enter step number to start from (or press Enter for all steps): " START_STEP
-        START_STEP=${START_STEP:-1}
+        if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+            # In batch mode default to step 1 unless START_STEP exported
+            START_STEP=${START_STEP:-1}
+            log "Non-interactive: starting from step ${START_STEP}"
+        else
+            read -p "Enter step number to start from (or press Enter for all steps): " START_STEP
+            START_STEP=${START_STEP:-1}
+        fi
     else
         log "Starting from step ${START_STEP} (provided via CLI)"
     fi
 
     # Validate start step
-    if ! [[ "${START_STEP}" =~ ^[1-6]$ ]]; then
-        error_exit "Invalid step number. Please enter 1-6."
+    if ! [[ "${START_STEP}" =~ ^[1-7]$ ]]; then
+        error_exit "Invalid step number. Please enter 1-7."
     fi
     
     # Run steps based on start step
@@ -879,16 +1305,20 @@ main() {
         if [[ "${MODE}" == "denoise" ]]; then
             step5_dada2_denoising
         elif [[ "${MODE}" == "cluster" ]]; then
-            step5_cluster_from_demux
+            step7_cluster_from_demux
         else
             error_exit "Unknown mode: ${MODE}. Supported: denoise, cluster"
         fi
     fi
     
     if [[ ${START_STEP} -le 6 ]]; then
-        step6_taxonomic_classification
+        step6_decontamination
     fi
     
+    if [[ ${START_STEP} -le 7 ]]; then
+        step8_taxonomic_classification
+    fi
+
     log "Pipeline completed successfully!"
     echo ""
     echo "=============================================="
@@ -899,12 +1329,30 @@ main() {
     echo "- Data/processed_data/demux-paired-end.qza (imported data)"
     echo "- Data/processed_data/demux-paired-end.qzv (quality visualization)"
     if [[ "${MODE}" == "denoise" ]]; then
-        echo "- Results/denoise_mode/table.qza (feature table)"
-        echo "- Results/denoise_mode/rep-seqs.qza (representative sequences)"
+        # Check for decontaminated files
+        if [[ -f "Results/denoise_mode/table-clean.qza" ]]; then
+            echo "- Results/denoise_mode/table-clean.qza (decontaminated feature table, controls removed)"
+            echo "- Results/denoise_mode/rep-seqs-no-contam.qza (filtered representative sequences)"
+        elif [[ -f "Results/denoise_mode/table-no-contam.qza" ]]; then
+            echo "- Results/denoise_mode/table-no-contam.qza (contaminant-filtered feature table)"
+            echo "- Results/denoise_mode/rep-seqs-no-contam.qza (filtered representative sequences)"
+        else
+            echo "- Results/denoise_mode/table.qza (feature table)"
+            echo "- Results/denoise_mode/rep-seqs.qza (representative sequences)"
+        fi
         echo "- Results/denoise_mode/denoising-stats.qza (DADA2 statistics)"
     elif [[ "${MODE}" == "cluster" ]]; then
-        echo "- Results/cluster_mode/table.qza (feature table)"
-        echo "- Results/cluster_mode/rep-seqs.qza (representative sequences)"
+        # Check for decontaminated files
+        if [[ -f "Results/cluster_mode/table-clean.qza" ]]; then
+            echo "- Results/cluster_mode/table-clean.qza (decontaminated feature table, controls removed)"
+            echo "- Results/cluster_mode/rep-seqs-no-contam.qza (filtered representative sequences)"
+        elif [[ -f "Results/cluster_mode/table-no-contam.qza" ]]; then
+            echo "- Results/cluster_mode/table-no-contam.qza (contaminant-filtered feature table)"
+            echo "- Results/cluster_mode/rep-seqs-no-contam.qza (filtered representative sequences)"
+        else
+            echo "- Results/cluster_mode/table.qza (feature table)"
+            echo "- Results/cluster_mode/rep-seqs.qza (representative sequences)"
+        fi
         echo "- Results/cluster_mode/joined.qza, filtered-seqs.qza (intermediate files)"
     fi
     if [[ -f "Results/${MODE}_mode/table-cr-97.qza" || -f "Results/${MODE}_mode/table-or-97.qza" ]]; then
@@ -940,7 +1388,7 @@ usage() {
     echo "  -c, --clean        Remove all checkpoints and start fresh"
     echo "  -s, --status       Show status of completed steps"
     echo "  -r, --remove       Remove a specific checkpoint"
-    echo "                     Example: -r step5_dada2_denoising"
+    echo "                     Example: -r step7_taxonomic_classification"
     echo "  -d, --delete-intermediate"
     echo "                     Delete intermediate outputs from step 4 and 5"
     echo "  -m, --mode         Pipeline mode: 'denoise' (DADA2) or 'cluster' (generate OTUs from demux). Default: denoise"
@@ -952,8 +1400,8 @@ usage() {
     echo "  $0                 Run the pipeline (resume from last checkpoint)"
     echo "  $0 --clean         Start the pipeline from scratch"
     echo "  $0 --status        Check which steps have been completed"
-    echo "  $0 -r 5            Remove checkpoint(s) for step 5 (both denoise/cluster variants)"
     echo "  $0 -r 6            Remove checkpoint for step 6"
+    echo "  $0 -r 7            Remove checkpoint for step 7"
     echo "  $0 -d              Delete intermediate outputs and re-run step 4/5"
     echo "  $0 -e myqiime      Use conda environment named 'myqiime'"
     echo "  $0 -m cluster -e qiime2-amplicon  Use cluster mode with custom environment"
@@ -964,8 +1412,9 @@ usage() {
     echo "  - step3_visualize_demux"
     echo "  - step4_remove_primers"
     echo "  - step5_dada2_denoising"
-    echo "  - step5_cluster_from_demux"
-    echo "  - step6_taxonomic_classification"
+    echo "  - step7_cluster_from_demux"
+    echo "  - step6_decontamination"
+    echo "  - step8_taxonomic_classification"
 }
 
 # Status function
@@ -973,8 +1422,8 @@ show_status() {
     echo "Pipeline Status:"
     echo "================"
     
-    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step6_taxonomic_classification")
-    local step_names=("Step 1: Environment Setup" "Step 2: Import Data" "Step 3: Visualize Demux" "Step 4: Remove Primers" "Step 5: DADA2 Denoising/Clustering" "Step 6: Taxonomic Classification")
+    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step7_cluster_from_demux" "step6_decontamination" "step8_taxonomic_classification")
+    local step_names=("Step 1: Environment Setup" "Step 2: Import Data" "Step 3: Visualize Demux" "Step 4: Remove Primers" "Step 5: DADA2 Denoising" "Step 5: Cluster from Demux" "Step 6: Decontamination" "Step 7: Taxonomic Classification")
     
     for i in "${!steps[@]}"; do
         local step="${steps[$i]}"
@@ -1117,7 +1566,7 @@ while [[ $# -gt 0 ]]; do
             if [[ -n "${2:-}" ]]; then
                 arg="$2"
                 case "${arg}" in
-                    [1-6])
+                    [1-7])
                         case "${arg}" in
                             1)
                                 remove_checkpoint "step1_environment_setup"
@@ -1132,12 +1581,14 @@ while [[ $# -gt 0 ]]; do
                                 remove_checkpoint "step4_remove_primers"
                                 ;;
                             5)
-                                # Step 5 has two possible checkpoints depending on mode; remove both
                                 remove_checkpoint "step5_dada2_denoising"
-                                remove_checkpoint "step5_cluster_from_demux"
+                                remove_checkpoint "step7_cluster_from_demux"
                                 ;;
                             6)
-                                remove_checkpoint "step6_taxonomic_classification"
+                                remove_checkpoint "step6_decontamination"
+                                ;;
+                            7)
+                                remove_checkpoint "step8_taxonomic_classification"
                                 ;;
                         esac
                         exit 0
@@ -1149,10 +1600,16 @@ while [[ $# -gt 0 ]]; do
                         ;;
                 esac
             else
-                echo "Error: --remove requires an argument (checkpoint number 1-6 or checkpoint name)"
-                echo "Example: $0 --remove 6"
+                echo "Error: --remove requires an argument (checkpoint number 1-7 or checkpoint name)"
+                echo "Example: $0 --remove 7"
                 exit 1
             fi
+            ;;
+        -b|--batch|--non-interactive)
+            # Run in non-interactive batch mode (suitable for HPC). Prompts will be skipped
+            # and environment variables will be used where available.
+            NON_INTERACTIVE="true"
+            shift
             ;;
         -m|--mode)
             if [[ -n "${2:-}" ]]; then
@@ -1173,8 +1630,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
-        # positional: start step (1-6)
-        [1-6])
+        # positional: start step (1-7)
+        [1-7])
             START_STEP="$1"
             shift
             ;;
