@@ -293,7 +293,7 @@ step4_remove_primers() {
             return 0
             ;;
     esac
-    
+
     # Check if input file exists
     DEMUX_PATH=""
     if [[ -f "Data/processed_data/demux-paired-end.qza" ]]; then
@@ -303,11 +303,11 @@ step4_remove_primers() {
     else
         error_exit "Input file demux-paired-end.qza not found. Please run step 2 first."
     fi
-    
+
     log "Removing primers using cutadapt..."
     log "Forward primer: ${PRIMER_F}"
     log "Reverse primer: ${PRIMER_R}"
-    
+
     qiime cutadapt trim-paired \
         --i-demultiplexed-sequences "${DEMUX_PATH}" \
         --p-front-f "${PRIMER_F}" \
@@ -316,21 +316,21 @@ step4_remove_primers() {
         --p-no-indels \
         --o-trimmed-sequences Data/processed_data/demux-trimmed.qza \
         --verbose || error_exit "Primer removal failed"
-    
+
     # Verify output file was created
     if [[ ! -f "Data/processed_data/demux-trimmed.qza" ]]; then
         error_exit "Output file Data/processed_data/demux-trimmed.qza was not created"
     fi
-    
+
     # Create visualization of trimmed data
     log "Creating visualization of trimmed sequences..."
     qiime demux summarize \
         --i-data Data/processed_data/demux-trimmed.qza \
         --o-visualization Data/processed_data/demux-trimmed.qzv || \
         log "Warning: Failed to create trimmed data visualization"
-    
+
     create_checkpoint "step4_remove_primers"
-    
+
     echo ""
     echo "=================================================="
     echo "Primer Removal Complete!"
@@ -342,7 +342,7 @@ step4_remove_primers() {
     echo ""
     echo "IMPORTANT: Use demux-trimmed.qza for downstream analysis (Step 5)"
     echo ""
-    
+
     pause_script "Primer Removal" "Primers removed. Review demux-trimmed.qzv to verify primer removal before proceeding."
 }
 
@@ -421,6 +421,8 @@ step5_dada2_denoising() {
         --i-demultiplexed-seqs "${DEMUX_PATH}" \
         --p-trunc-len-f "${TRUNC_LEN_F}" \
         --p-trunc-len-r "${TRUNC_LEN_R}" \
+        --p-trim-left-f 19 \
+        --p-trim-left-r 20 \
         --p-n-threads "${N_THREADS}" \
         --o-table Results/denoise_mode/table.qza \
         --o-representative-sequences Results/denoise_mode/rep-seqs.qza \
@@ -478,6 +480,7 @@ step5_dada2_denoising() {
 }
 
 # Step 6: Decontamination
+
 step6_decontamination() {
     if check_checkpoint "step6_decontamination"; then
         return 0
@@ -971,6 +974,10 @@ step8_taxonomic_classification() {
         CLASSIFIER_PATH="Data/reference_dbs/classifier.qza"
     elif [[ -f "classifier.qza" ]]; then
         CLASSIFIER_PATH="classifier.qza"
+    elif [[ -f "Data/reference_dbs/silva-v4-classifier.qza" ]]; then
+        CLASSIFIER_PATH="Data/reference_dbs/silva-v4-classifier.qza"
+    elif [[ -f "silva-v4-classifier.qza" ]]; then
+        CLASSIFIER_PATH="silva-v4-classifier.qza"
     fi
 
     # If a classifier was found, ask the user whether to use it or choose other options
@@ -1210,6 +1217,20 @@ step8_taxonomic_classification() {
     echo "   - Taxonomy table visualization"
     echo ""
     echo "3. ${OUTPUT_DIR}/taxa-bar-plots.qzv"
+        # export feature table to biom and tsv
+        echo "Exporting feature table to biom and tsv..."
+        mkdir -p "${OUTPUT_DIR}/exported-table"
+        qiime tools export \
+            --input-path "${OUTPUT_DIR}/table.qza" \
+            --output-path "${OUTPUT_DIR}/exported-table"
+        if command -v biom &> /dev/null; then
+            biom convert \
+                -i "${OUTPUT_DIR}/exported-table/feature-table.biom" \
+                -o "${OUTPUT_DIR}/exported-table/feature-table.tsv" \
+                --to-tsv
+        else
+            echo "Warning: biom tool not found, cannot convert biom to tsv."
+        fi
     echo "   - Interactive taxonomic bar plots (like your example image!)"
     echo "   - View at https://view.qiime2.org"
     echo ""
