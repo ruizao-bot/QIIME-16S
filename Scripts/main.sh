@@ -916,9 +916,9 @@ step5_cluster_from_demux() {
     pause_script "Cluster-from-demux" "Clustering-from-demux completed. Outputs in Results/cluster_mode/: table.qza, rep-seqs.qza"
 }
 
-# Step 8: Taxonomic Classification
-step8_taxonomic_classification() {
-    if check_checkpoint "step8_taxonomic_classification"; then
+# Step 7: Taxonomic Classification
+step7_taxonomic_classification() {
+    if check_checkpoint "step7_taxonomic_classification"; then
         return 0
     fi
     
@@ -970,7 +970,11 @@ step8_taxonomic_classification() {
     
     # Check for classifier (detect but always ask user whether to use it)
     CLASSIFIER_PATH=""
-    if [[ -f "Data/reference_dbs/classifier.qza" ]]; then
+    if [[ -f "Data/reference_dbs/silva-138-99-nb-classifier.qza" ]]; then
+        CLASSIFIER_PATH="Data/reference_dbs/silva-138-99-nb-classifier.qza"
+    elif [[ -f "silva-138-99-nb-classifier.qza" ]]; then
+        CLASSIFIER_PATH="silva-138-99-nb-classifier.qza"
+    elif [[ -f "Data/reference_dbs/classifier.qza" ]]; then
         CLASSIFIER_PATH="Data/reference_dbs/classifier.qza"
     elif [[ -f "classifier.qza" ]]; then
         CLASSIFIER_PATH="classifier.qza"
@@ -1156,18 +1160,18 @@ step8_taxonomic_classification() {
                 echo "  wget -O Data/reference_dbs/classifier.qza \\"
                 echo "    https://data.qiime2.org/classifiers/sklearn-1.4.2/silva/silva-138-99-nb-classifier.qza"
                 echo ""
-                log "Skipping taxonomic classification. Please download a classifier and run step 6 again."
-                create_checkpoint "step6_taxonomic_classification"
+                log "Skipping taxonomic classification. Please download a classifier and run step 7 again."
+                create_checkpoint "step7_taxonomic_classification"
                 return 0
                 ;;
             4)
                 log "Skipping taxonomic classification."
-                create_checkpoint "step6_taxonomic_classification"
+                create_checkpoint "step7_taxonomic_classification"
                 return 0
                 ;;
             *)
                 log "Invalid choice. Skipping taxonomic classification."
-                create_checkpoint "step6_taxonomic_classification"
+                create_checkpoint "step7_taxonomic_classification"
                 return 0
                 ;;
         esac
@@ -1243,7 +1247,386 @@ step8_taxonomic_classification() {
     echo "of different taxa across your samples, just like your example!"
     echo ""
     
+    create_checkpoint "step7_taxonomic_classification"
     pause_script "Taxonomic Classification" "Taxonomic classification complete. Open taxa-bar-plots.qzv to see your taxonomic composition!"
+}
+
+# Step 8: Phylogenetic Tree and Diversity Analysis
+step8_diversity_analysis() {
+    if check_checkpoint "step8_diversity_analysis"; then
+        return 0
+    fi
+    
+    log "Starting Step 8: Phylogenetic Tree Generation and Diversity Analysis"
+    
+    # Ensure environment is activated
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${ENV_NAME}" || error_exit "Failed to activate QIIME2 environment"
+    
+    # Determine which mode we're in and set paths
+    if [[ "${MODE}" == "denoise" ]]; then
+        TABLE_PATH="Results/denoise_mode/table.qza"
+        REP_SEQS_PATH="Results/denoise_mode/rep-seqs.qza"
+        OUTPUT_DIR="Results/denoise_mode"
+        
+        # Check if decontaminated files exist and prefer them
+        if [[ -f "Results/denoise_mode/table-clean.qza" ]]; then
+            TABLE_PATH="Results/denoise_mode/table-clean.qza"
+            REP_SEQS_PATH="Results/denoise_mode/rep-seqs-no-contam.qza"
+            log "Using decontaminated table and sequences"
+        elif [[ -f "Results/denoise_mode/table-no-contam.qza" ]]; then
+            TABLE_PATH="Results/denoise_mode/table-no-contam.qza"
+            REP_SEQS_PATH="Results/denoise_mode/rep-seqs-no-contam.qza"
+            log "Using contaminant-filtered table and sequences"
+        fi
+    elif [[ "${MODE}" == "cluster" ]]; then
+        TABLE_PATH="Results/cluster_mode/table.qza"
+        REP_SEQS_PATH="Results/cluster_mode/rep-seqs.qza"
+        OUTPUT_DIR="Results/cluster_mode"
+        
+        # Check if decontaminated files exist and prefer them
+        if [[ -f "Results/cluster_mode/table-clean.qza" ]]; then
+            TABLE_PATH="Results/cluster_mode/table-clean.qza"
+            REP_SEQS_PATH="Results/cluster_mode/rep-seqs-no-contam.qza"
+            log "Using decontaminated table and sequences"
+        elif [[ -f "Results/cluster_mode/table-no-contam.qza" ]]; then
+            TABLE_PATH="Results/cluster_mode/table-no-contam.qza"
+            REP_SEQS_PATH="Results/cluster_mode/rep-seqs-no-contam.qza"
+            log "Using contaminant-filtered table and sequences"
+        fi
+    else
+        error_exit "Unknown mode: ${MODE}"
+    fi
+    
+    # Check if required files exist
+    if [[ ! -f "${TABLE_PATH}" ]] || [[ ! -f "${REP_SEQS_PATH}" ]]; then
+        error_exit "Required files not found. Please run step 5 first."
+    fi
+    
+    # Create diversity output directory
+    mkdir -p "${OUTPUT_DIR}/diversity"
+    
+    echo ""
+    echo "=================================================="
+    echo "Phylogenetic Tree Generation"
+    echo "=================================================="
+    echo ""
+    
+    log "Generating phylogenetic tree (required for UniFrac metrics)..."
+    log "This involves: alignment → masking → tree building → rooting"
+    
+    qiime phylogeny align-to-tree-mafft-fasttree \
+        --i-sequences "${REP_SEQS_PATH}" \
+        --o-alignment "${OUTPUT_DIR}/aligned-rep-seqs.qza" \
+        --o-masked-alignment "${OUTPUT_DIR}/masked-aligned-rep-seqs.qza" \
+        --o-tree "${OUTPUT_DIR}/unrooted-tree.qza" \
+        --o-rooted-tree "${OUTPUT_DIR}/rooted-tree.qza" || \
+        error_exit "Phylogenetic tree generation failed"
+    
+    log "Phylogenetic tree generated successfully"
+    
+    echo ""
+    echo "=================================================="
+    echo "Diversity Analysis"
+    echo "=================================================="
+    echo ""
+    
+    # Check for metadata file
+    METADATA_PATH=""
+    if [[ -f "Data/metadata/metadata.tsv" ]]; then
+        METADATA_PATH="Data/metadata/metadata.tsv"
+        log "Using metadata file: Data/metadata/metadata.tsv"
+    elif [[ -f "metadata.tsv" ]]; then
+        METADATA_PATH="metadata.tsv"
+        log "Using metadata file: metadata.tsv (in working directory)"
+    else
+        log "Warning: No metadata.tsv file found. Diversity metrics will be calculated but group comparisons will not be available."
+        log "To enable group comparisons, create a metadata file at Data/metadata/metadata.tsv"
+    fi
+    
+    # Determine sampling depth
+    echo ""
+    echo "For diversity analysis, you need to choose a sampling depth (rarefaction depth)."
+    echo "This should be based on the feature table summary (table.qzv)."
+    echo ""
+    echo "View ${OUTPUT_DIR}/table.qzv at https://view.qiime2.org to see:"
+    echo "- Sampling depth per sample"
+    echo "- Recommended rarefaction depth"
+    echo ""
+    
+    if [[ "${NON_INTERACTIVE}" == "true" && -n "${SAMPLING_DEPTH:-}" ]]; then
+        log "Non-interactive: using SAMPLING_DEPTH=${SAMPLING_DEPTH}"
+    elif [[ "${NON_INTERACTIVE}" == "true" ]]; then
+        SAMPLING_DEPTH=1000
+        log "Non-interactive: default SAMPLING_DEPTH=${SAMPLING_DEPTH}"
+    else
+        read -p "Enter sampling depth for rarefaction (e.g., 1000): " SAMPLING_DEPTH
+    fi
+    
+    SAMPLING_DEPTH=${SAMPLING_DEPTH:-1000}
+    log "Using sampling depth: ${SAMPLING_DEPTH}"
+    
+    # Run core metrics phylogenetic (includes most common metrics)
+    log "Calculating core diversity metrics (alpha and beta diversity)..."
+    
+    CORE_METRICS_SUCCESS=false
+    if [[ -n "${METADATA_PATH}" ]]; then
+        if qiime diversity core-metrics-phylogenetic \
+            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
+            --i-table "${TABLE_PATH}" \
+            --p-sampling-depth "${SAMPLING_DEPTH}" \
+            --m-metadata-file "${METADATA_PATH}" \
+            --output-dir "${OUTPUT_DIR}/diversity/core-metrics"; then
+            CORE_METRICS_SUCCESS=true
+            log "Core metrics calculated successfully"
+        else
+            log "WARNING: Core metrics calculation failed (likely due to insufficient samples after rarefaction)"
+            log "This typically happens when:"
+            log "  1. You have < 3 samples with >= ${SAMPLING_DEPTH} reads"
+            log "  2. Rarefaction depth (${SAMPLING_DEPTH}) is too high for your data"
+            log "Will calculate individual metrics without rarefaction..."
+        fi
+    else
+        if qiime diversity core-metrics-phylogenetic \
+            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
+            --i-table "${TABLE_PATH}" \
+            --p-sampling-depth "${SAMPLING_DEPTH}" \
+            --output-dir "${OUTPUT_DIR}/diversity/core-metrics"; then
+            CORE_METRICS_SUCCESS=true
+            log "Core metrics calculated successfully"
+        else
+            log "WARNING: Core metrics calculation failed (likely due to insufficient samples after rarefaction)"
+            log "This typically happens when:"
+            log "  1. You have < 3 samples with >= ${SAMPLING_DEPTH} reads"
+            log "  2. Rarefaction depth (${SAMPLING_DEPTH}) is too high for your data"
+            log "Will calculate individual metrics without rarefaction..."
+        fi
+    fi
+    
+    # Calculate additional alpha diversity metrics (Chao1 and Simpson)
+    log "Calculating additional alpha diversity metrics (Chao1, Simpson)..."
+    
+    qiime diversity alpha \
+        --i-table "${TABLE_PATH}" \
+        --p-metric chao1 \
+        --o-alpha-diversity "${OUTPUT_DIR}/diversity/chao1-vector.qza" || \
+        log "Warning: Failed to calculate Chao1"
+    
+    qiime diversity alpha \
+        --i-table "${TABLE_PATH}" \
+        --p-metric simpson \
+        --o-alpha-diversity "${OUTPUT_DIR}/diversity/simpson-vector.qza" || \
+        log "Warning: Failed to calculate Simpson index"
+    
+    # If core metrics failed, calculate basic metrics without rarefaction as fallback
+    if [[ "${CORE_METRICS_SUCCESS}" == "false" ]]; then
+        log "Calculating fallback diversity metrics without rarefaction..."
+        mkdir -p "${OUTPUT_DIR}/diversity/no-rarefaction"
+        
+        # Alpha diversity metrics
+        for metric in shannon observed_features; do
+            log "Calculating ${metric}..."
+            qiime diversity alpha \
+                --i-table "${TABLE_PATH}" \
+                --p-metric "${metric}" \
+                --o-alpha-diversity "${OUTPUT_DIR}/diversity/no-rarefaction/${metric}_vector.qza" || \
+                log "Warning: Failed to calculate ${metric}"
+        done
+        
+        # Faith's PD (requires phylogenetic tree)
+        log "Calculating Faith's PD..."
+        qiime diversity alpha-phylogenetic \
+            --i-table "${TABLE_PATH}" \
+            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
+            --p-metric faith_pd \
+            --o-alpha-diversity "${OUTPUT_DIR}/diversity/no-rarefaction/faith_pd_vector.qza" || \
+            log "Warning: Failed to calculate Faith's PD"
+        
+        log "Note: Beta diversity metrics skipped due to insufficient samples for PCoA"
+        log "You need at least 3 samples to calculate beta diversity with ordination"
+    fi
+    
+    # Create visualizations for additional metrics
+    if [[ -n "${METADATA_PATH}" ]]; then
+        if [[ -f "${OUTPUT_DIR}/diversity/chao1-vector.qza" ]]; then
+            qiime diversity alpha-group-significance \
+                --i-alpha-diversity "${OUTPUT_DIR}/diversity/chao1-vector.qza" \
+                --m-metadata-file "${METADATA_PATH}" \
+                --o-visualization "${OUTPUT_DIR}/diversity/chao1-significance.qzv" || \
+                log "Warning: Failed to create Chao1 significance visualization"
+        fi
+        
+        if [[ -f "${OUTPUT_DIR}/diversity/simpson-vector.qza" ]]; then
+            qiime diversity alpha-group-significance \
+                --i-alpha-diversity "${OUTPUT_DIR}/diversity/simpson-vector.qza" \
+                --m-metadata-file "${METADATA_PATH}" \
+                --o-visualization "${OUTPUT_DIR}/diversity/simpson-significance.qzv" || \
+                log "Warning: Failed to create Simpson significance visualization"
+        fi
+    fi
+    
+    # Export alpha diversity metrics to TSV
+    log "Exporting alpha diversity metrics to TSV format..."
+    
+    for metric in shannon observed_features evenness faith_pd chao1 simpson; do
+        METRIC_FILE=""
+        if [[ -f "${OUTPUT_DIR}/diversity/core-metrics/${metric}_vector.qza" ]]; then
+            METRIC_FILE="${OUTPUT_DIR}/diversity/core-metrics/${metric}_vector.qza"
+        elif [[ -f "${OUTPUT_DIR}/diversity/${metric}-vector.qza" ]]; then
+            METRIC_FILE="${OUTPUT_DIR}/diversity/${metric}-vector.qza"
+        fi
+        
+        if [[ -n "${METRIC_FILE}" ]]; then
+            mkdir -p "${OUTPUT_DIR}/diversity/exported-${metric}"
+            qiime tools export \
+                --input-path "${METRIC_FILE}" \
+                --output-path "${OUTPUT_DIR}/diversity/exported-${metric}" || \
+                log "Warning: Failed to export ${metric}"
+        fi
+    done
+    
+    # Export beta diversity distance matrices
+    log "Exporting beta diversity distance matrices to TSV format..."
+    
+    for metric in bray_curtis jaccard weighted_unifrac unweighted_unifrac; do
+        if [[ -f "${OUTPUT_DIR}/diversity/core-metrics/${metric}_distance_matrix.qza" ]]; then
+            mkdir -p "${OUTPUT_DIR}/diversity/exported-${metric}"
+            qiime tools export \
+                --input-path "${OUTPUT_DIR}/diversity/core-metrics/${metric}_distance_matrix.qza" \
+                --output-path "${OUTPUT_DIR}/diversity/exported-${metric}" || \
+                log "Warning: Failed to export ${metric} distance matrix"
+        fi
+    done
+    
+    # Export PCoA results to TSV format
+    log "Exporting PCoA results to TSV format..."
+    
+    for metric in bray_curtis jaccard weighted_unifrac unweighted_unifrac; do
+        if [[ -f "${OUTPUT_DIR}/diversity/core-metrics/${metric}_pcoa_results.qza" ]]; then
+            mkdir -p "${OUTPUT_DIR}/diversity/exported-${metric}-pcoa"
+            qiime tools export \
+                --input-path "${OUTPUT_DIR}/diversity/core-metrics/${metric}_pcoa_results.qza" \
+                --output-path "${OUTPUT_DIR}/diversity/exported-${metric}-pcoa" || \
+                log "Warning: Failed to export ${metric} PCoA results"
+        fi
+    done
+    
+    # Export rarefied table
+    log "Exporting rarefied feature table..."
+    if [[ -f "${OUTPUT_DIR}/diversity/core-metrics/rarefied_table.qza" ]]; then
+        mkdir -p "${OUTPUT_DIR}/diversity/exported-rarefied-table"
+        qiime tools export \
+            --input-path "${OUTPUT_DIR}/diversity/core-metrics/rarefied_table.qza" \
+            --output-path "${OUTPUT_DIR}/diversity/exported-rarefied-table" || \
+            log "Warning: Failed to export rarefied table"
+        
+        # Convert rarefied BIOM to TSV if biom tool is available
+        if command -v biom &> /dev/null && [[ -f "${OUTPUT_DIR}/diversity/exported-rarefied-table/feature-table.biom" ]]; then
+            biom convert \
+                -i "${OUTPUT_DIR}/diversity/exported-rarefied-table/feature-table.biom" \
+                -o "${OUTPUT_DIR}/diversity/exported-rarefied-table/feature-table.tsv" \
+                --to-tsv || \
+                log "Warning: Failed to convert rarefied table to TSV"
+        fi
+    fi
+    
+    # Export phylogenetic tree in Newick format
+    log "Exporting phylogenetic trees..."
+    
+    if [[ -f "${OUTPUT_DIR}/rooted-tree.qza" ]]; then
+        mkdir -p "${OUTPUT_DIR}/exported-tree"
+        qiime tools export \
+            --input-path "${OUTPUT_DIR}/rooted-tree.qza" \
+            --output-path "${OUTPUT_DIR}/exported-tree" || \
+            log "Warning: Failed to export rooted tree"
+        
+        # Rename to more descriptive filename
+        if [[ -f "${OUTPUT_DIR}/exported-tree/tree.nwk" ]]; then
+            mv "${OUTPUT_DIR}/exported-tree/tree.nwk" "${OUTPUT_DIR}/exported-tree/rooted-tree.nwk"
+        fi
+    fi
+    
+    if [[ -f "${OUTPUT_DIR}/unrooted-tree.qza" ]]; then
+        mkdir -p "${OUTPUT_DIR}/exported-tree"
+        qiime tools export \
+            --input-path "${OUTPUT_DIR}/unrooted-tree.qza" \
+            --output-path "${OUTPUT_DIR}/exported-tree/unrooted" || \
+            log "Warning: Failed to export unrooted tree"
+        
+        # Move and rename
+        if [[ -f "${OUTPUT_DIR}/exported-tree/unrooted/tree.nwk" ]]; then
+            mv "${OUTPUT_DIR}/exported-tree/unrooted/tree.nwk" "${OUTPUT_DIR}/exported-tree/unrooted-tree.nwk"
+            rmdir "${OUTPUT_DIR}/exported-tree/unrooted" 2>/dev/null || true
+        fi
+    fi
+    
+    create_checkpoint "step8_diversity_analysis"
+    
+    echo ""
+    echo "=================================================="
+    echo "Diversity Analysis Complete!"
+    echo "=================================================="
+    echo ""
+    echo "Generated files:"
+    echo ""
+    echo "Phylogenetic Tree:"
+    echo "1. ${OUTPUT_DIR}/rooted-tree.qza - Rooted phylogenetic tree"
+    echo "2. ${OUTPUT_DIR}/unrooted-tree.qza - Unrooted phylogenetic tree"
+    echo "3. ${OUTPUT_DIR}/exported-tree/rooted-tree.nwk - Tree in Newick format"
+    echo ""
+    echo "Alpha Diversity Metrics (QZA + TSV):"
+    echo "1. Shannon Index - ${OUTPUT_DIR}/diversity/core-metrics/shannon_vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-shannon/alpha-diversity.tsv"
+    echo "2. Observed Features (Richness) - ${OUTPUT_DIR}/diversity/core-metrics/observed_features_vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-observed_features/alpha-diversity.tsv"
+    echo "3. Chao1 - ${OUTPUT_DIR}/diversity/chao1-vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-chao1/alpha-diversity.tsv"
+    echo "4. Simpson Index - ${OUTPUT_DIR}/diversity/simpson-vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-simpson/alpha-diversity.tsv"
+    echo "5. Faith's Phylogenetic Diversity - ${OUTPUT_DIR}/diversity/core-metrics/faith_pd_vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-faith_pd/alpha-diversity.tsv"
+    echo "6. Pielou's Evenness - ${OUTPUT_DIR}/diversity/core-metrics/evenness_vector.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-evenness/alpha-diversity.tsv"
+    echo ""
+    echo "Beta Diversity Distance Matrices (QZA + TSV):"
+    echo "1. Bray-Curtis - ${OUTPUT_DIR}/diversity/core-metrics/bray_curtis_distance_matrix.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-bray_curtis/distance-matrix.tsv"
+    echo "2. Jaccard - ${OUTPUT_DIR}/diversity/core-metrics/jaccard_distance_matrix.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-jaccard/distance-matrix.tsv"
+    echo "3. Weighted UniFrac - ${OUTPUT_DIR}/diversity/core-metrics/weighted_unifrac_distance_matrix.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-weighted_unifrac/distance-matrix.tsv"
+    echo "4. Unweighted UniFrac - ${OUTPUT_DIR}/diversity/core-metrics/unweighted_unifrac_distance_matrix.qza"
+    echo "   Exported: ${OUTPUT_DIR}/diversity/exported-unweighted_unifrac/distance-matrix.tsv"
+    echo ""
+    echo "PCoA Results (coordinates for plotting):"
+    echo "- ${OUTPUT_DIR}/diversity/exported-bray_curtis-pcoa/ordination.txt"
+    echo "- ${OUTPUT_DIR}/diversity/exported-jaccard-pcoa/ordination.txt"
+    echo "- ${OUTPUT_DIR}/diversity/exported-weighted_unifrac-pcoa/ordination.txt"
+    echo "- ${OUTPUT_DIR}/diversity/exported-unweighted_unifrac-pcoa/ordination.txt"
+    echo ""
+    echo "PCoA Visualizations (interactive plots):"
+    echo "- ${OUTPUT_DIR}/diversity/core-metrics/bray_curtis_emperor.qzv"
+    echo "- ${OUTPUT_DIR}/diversity/core-metrics/jaccard_emperor.qzv"
+    echo "- ${OUTPUT_DIR}/diversity/core-metrics/weighted_unifrac_emperor.qzv"
+    echo "- ${OUTPUT_DIR}/diversity/core-metrics/unweighted_unifrac_emperor.qzv"
+    echo ""
+    echo "Rarefied Feature Table:"
+    echo "- ${OUTPUT_DIR}/diversity/exported-rarefied-table/feature-table.tsv"
+    echo ""
+    if [[ -n "${METADATA_PATH}" ]]; then
+        echo "Alpha Diversity Significance Tests:"
+        echo "- ${OUTPUT_DIR}/diversity/core-metrics/shannon-group-significance.qzv"
+        echo "- ${OUTPUT_DIR}/diversity/core-metrics/faith-pd-group-significance.qzv"
+        echo "- ${OUTPUT_DIR}/diversity/core-metrics/evenness-group-significance.qzv"
+        echo "- ${OUTPUT_DIR}/diversity/chao1-significance.qzv"
+        echo "- ${OUTPUT_DIR}/diversity/simpson-significance.qzv"
+        echo ""
+    fi
+    echo "All .qzv files can be viewed at https://view.qiime2.org"
+    echo "All TSV files are ready for analysis in R, Python, or Excel"
+    echo ""
+    
+    pause_script "Diversity Analysis" "Diversity analysis complete. All results exported to TSV format!"
 }
 
 # Main execution function
@@ -1281,10 +1664,11 @@ main() {
     echo "5. Denoising or Clustering (mode: denoise or cluster)"
     echo "6. Decontamination (optional)"
     echo "7. Taxonomic Classification"
+    echo "8. Diversity Analysis (phylogenetic tree + alpha/beta diversity)"
     echo ""
     echo "You can:"
     echo "- Run all steps: Press Enter"
-    echo "- Run from specific step: Type step number (1-7)"
+    echo "- Run from specific step: Type step number (1-8)"
     echo "- Exit: Ctrl+C"
     echo ""
     if [[ -z "${START_STEP:-}" ]]; then
@@ -1301,8 +1685,8 @@ main() {
     fi
 
     # Validate start step
-    if ! [[ "${START_STEP}" =~ ^[1-7]$ ]]; then
-        error_exit "Invalid step number. Please enter 1-7."
+    if ! [[ "${START_STEP}" =~ ^[1-8]$ ]]; then
+        error_exit "Invalid step number. Please enter 1-8."
     fi
     
     # Run steps based on start step
@@ -1337,7 +1721,11 @@ main() {
     fi
     
     if [[ ${START_STEP} -le 7 ]]; then
-        step8_taxonomic_classification
+        step7_taxonomic_classification
+    fi
+    
+    if [[ ${START_STEP} -le 8 ]]; then
+        step8_diversity_analysis
     fi
 
     log "Pipeline completed successfully!"
@@ -1384,10 +1772,10 @@ main() {
     echo "Log file: ${LOG_FILE}"
     echo ""
     echo "Next steps:"
-    echo "1. Review the quality plots in Data/processed_data/demux-paired-end.qzv"
-    echo "2. Consider running taxonomic classification"
-    echo "3. Generate phylogenetic tree"
-    echo "4. Perform diversity analysis"
+    echo "1. Review the quality plots and visualizations at https://view.qiime2.org"
+    echo "2. Analyze alpha and beta diversity results"
+    echo "3. Perform additional statistical tests if needed"
+    echo "4. Export data for publication or further analysis"
     echo ""
 }
 
@@ -1443,8 +1831,8 @@ show_status() {
     echo "Pipeline Status:"
     echo "================"
     
-    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step5_cluster_from_demux" "step6_decontamination" "step8_taxonomic_classification")
-    local step_names=("Step 1: Environment Setup" "Step 2: Import Data" "Step 3: Visualize Demux" "Step 4: Remove Primers" "Step 5: DADA2 Denoising" "Step 5: Cluster from Demux" "Step 6: Decontamination" "Step 7: Taxonomic Classification")
+    local steps=("step1_environment_setup" "step2_import_data" "step3_visualize_demux" "step4_remove_primers" "step5_dada2_denoising" "step5_cluster_from_demux" "step6_decontamination" "step7_taxonomic_classification" "step8_diversity_analysis")
+    local step_names=("Step 1: Environment Setup" "Step 2: Import Data" "Step 3: Visualize Demux" "Step 4: Remove Primers" "Step 5: DADA2 Denoising" "Step 5: Cluster from Demux" "Step 6: Decontamination" "Step 7: Taxonomic Classification" "Step 8: Diversity Analysis")
     
     for i in "${!steps[@]}"; do
         local step="${steps[$i]}"

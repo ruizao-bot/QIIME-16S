@@ -7,9 +7,10 @@ Data/reference_dbs/*
 !Data/reference_dbs/.gitkeep
 Data/temp/*
 !Data/temp/.gitkeep
-
+picrust2_output_final/*
 # Ignore results and intermediate outputs (files only, not folders)
 Results/*
+denoise_mode/*
 !Results/.gitkeep
 
 # Ignore logs and checkpoints (files only, not folders)

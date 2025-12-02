@@ -1,11 +1,11 @@
 library(dplyr)
-# change to your own directory
-setwd("/Users/jiayi/Desktop/metagenomic_pipeline/QIIME/Scripts")
+# Set working directory if needed (optional, can be removed if run from project root)
+setwd("/Users/jiayi/Desktop/metagenomic_pipeline/QIIME")
 # Read feature table (ASV counts per sample)
 # biom->TSV files usually have:
 #  line 1: "# Constructed from biom file"
 #  line 2: "#OTU ID\tSample1\tSample2..."
-ft_path <- '../denoise_mode_gg/exported-table/feature-table.tsv'
+ft_path <- 'Results/denoise_mode/exported-table/feature-table.tsv'
 feature_table_lines <- readLines(ft_path)
 
 # Locate the header line that starts with "#OTU ID"
@@ -36,7 +36,7 @@ if (length(col_names) - 1L != ncol(feature_table)) {
 colnames(feature_table) <- col_names[-1]
 
 # Read taxonomy (Feature ID -> Taxon mapping)
-taxonomy <- read.table('../denoise_mode_gg/exported-taxonomy/taxonomy.tsv', 
+taxonomy <- read.table('Results/denoise_mode/exported-taxonomy/taxonomy.tsv', 
                       sep='\t', header=TRUE, row.names=1)
 
 # Extract only the Taxon column from taxonomy
@@ -54,7 +54,7 @@ taxonomy_matched <- taxonomy_only[common_features, , drop=FALSE]
 merged <- cbind(taxonomy_matched, feature_table_matched)
 
 # Save with proper column names
-write.table(merged, '../denoise_mode_gg/taxonomy-abundance-table.tsv', 
+write.table(merged, 'Results/denoise_mode/taxonomy-abundance-table.tsv', 
             sep='\t', quote=FALSE, row.names=TRUE)
 
 
@@ -89,5 +89,5 @@ rownames(rank_df) <- rownames(taxonomy_matched)
 
 merged_ranks <- cbind(rank_df, feature_table_matched)
 
-write.table(merged_ranks, '../denoise_mode_gg/final-table-with-ranks.tsv',
+write.table(merged_ranks, 'Results/denoise_mode/final-table-with-ranks.tsv',
                         sep='\t', quote=FALSE, row.names=TRUE)

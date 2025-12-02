@@ -1,15 +1,15 @@
-sample-id	control_status
-A16B	sample
-A16	sample
-A16S	sample
-A19B	sample
-A19S	sample
-A19	sample
-A1	control
-A2	control
-B10B	sample
-B10S	sample
-B10	sample
-B6B	sample
-B6S	sample
-B6	sample
+sample-id	control_status	species	sample_type
+A16	sample	species_A	wood
+A16B	sample	species_A	bark
+A16S	sample	species_A	soil
+A19	sample	species_A	wood
+A19B	sample	species_A	bark
+A19S	sample	species_A	soil
+B10	sample	species_B	wood
+B10B	sample	species_B	bark
+B10S	sample	species_B	soil
+B6	sample	species_B	wood
+B6B	sample	species_B	bark
+B6S	sample	species_B	soil
+A1	control	NA	NA
+A2	control	NA	NA
