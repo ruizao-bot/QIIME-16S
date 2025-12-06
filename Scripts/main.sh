@@ -1366,85 +1366,58 @@ step8_diversity_analysis() {
     SAMPLING_DEPTH=${SAMPLING_DEPTH:-1000}
     log "Using sampling depth: ${SAMPLING_DEPTH}"
     
-    # Run core metrics phylogenetic (includes most common metrics)
-    log "Calculating core diversity metrics (alpha and beta diversity)..."
-    
-    CORE_METRICS_SUCCESS=false
-    if [[ -n "${METADATA_PATH}" ]]; then
-        if qiime diversity core-metrics-phylogenetic \
-            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
-            --i-table "${TABLE_PATH}" \
-            --p-sampling-depth "${SAMPLING_DEPTH}" \
-            --m-metadata-file "${METADATA_PATH}" \
-            --output-dir "${OUTPUT_DIR}/diversity/core-metrics"; then
-            CORE_METRICS_SUCCESS=true
-            log "Core metrics calculated successfully"
-        else
-            log "WARNING: Core metrics calculation failed (likely due to insufficient samples after rarefaction)"
-            log "This typically happens when:"
-            log "  1. You have < 3 samples with >= ${SAMPLING_DEPTH} reads"
-            log "  2. Rarefaction depth (${SAMPLING_DEPTH}) is too high for your data"
-            log "Will calculate individual metrics without rarefaction..."
-        fi
-    else
-        if qiime diversity core-metrics-phylogenetic \
-            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
-            --i-table "${TABLE_PATH}" \
-            --p-sampling-depth "${SAMPLING_DEPTH}" \
-            --output-dir "${OUTPUT_DIR}/diversity/core-metrics"; then
-            CORE_METRICS_SUCCESS=true
-            log "Core metrics calculated successfully"
-        else
-            log "WARNING: Core metrics calculation failed (likely due to insufficient samples after rarefaction)"
-            log "This typically happens when:"
-            log "  1. You have < 3 samples with >= ${SAMPLING_DEPTH} reads"
-            log "  2. Rarefaction depth (${SAMPLING_DEPTH}) is too high for your data"
-            log "Will calculate individual metrics without rarefaction..."
-        fi
-    fi
-    
-    # Calculate additional alpha diversity metrics (Chao1 and Simpson)
-    log "Calculating additional alpha diversity metrics (Chao1, Simpson)..."
-    
+    # Only calculate and export alpha diversity (shannon) and unweighted unifrac
+    log "Calculating alpha diversity (shannon)..."
     qiime diversity alpha \
         --i-table "${TABLE_PATH}" \
-        --p-metric chao1 \
-        --o-alpha-diversity "${OUTPUT_DIR}/diversity/chao1-vector.qza" || \
-        log "Warning: Failed to calculate Chao1"
-    
-    qiime diversity alpha \
+        --p-metric shannon \
+        --o-alpha-diversity "${OUTPUT_DIR}/diversity/shannon_vector.qza" || \
+        log "Warning: Failed to calculate Shannon index"
+
+    log "Exporting shannon vector..."
+    qiime tools export \
+        --input-path "${OUTPUT_DIR}/diversity/shannon_vector.qza" \
+        --output-path "${OUTPUT_DIR}/diversity/shannon_exported" || \
+        log "Warning: Failed to export Shannon vector"
+
+    log "Visualizing shannon diversity..."
+    qiime diversity alpha-group-significance \
+        --i-alpha-diversity "${OUTPUT_DIR}/diversity/shannon_vector.qza" \
+        --m-metadata-file "${METADATA_PATH}" \
+        --o-visualization "${OUTPUT_DIR}/diversity/shannon_group_significance.qzv" || \
+        log "Warning: Failed to visualize Shannon diversity"
+
+    log "Calculating unweighted UniFrac distance..."
+    qiime diversity beta-phylogenetic \
         --i-table "${TABLE_PATH}" \
-        --p-metric simpson \
-        --o-alpha-diversity "${OUTPUT_DIR}/diversity/simpson-vector.qza" || \
-        log "Warning: Failed to calculate Simpson index"
+        --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
+        --p-metric unweighted_unifrac \
+        --o-distance-matrix "${OUTPUT_DIR}/diversity/unweighted_unifrac_distance_matrix.qza" || \
+        log "Warning: Failed to calculate unweighted UniFrac distance"
+
+    log "Exporting unweighted UniFrac distance matrix..."
+    qiime tools export \
+        --input-path "${OUTPUT_DIR}/diversity/unweighted_unifrac_distance_matrix.qza" \
+        --output-path "${OUTPUT_DIR}/diversity/unweighted_unifrac_exported" || \
+        log "Warning: Failed to export unweighted UniFrac distance matrix"
+
+    log "PCoA and visualization for unweighted UniFrac..."
+    qiime diversity pcoa \
+        --i-distance-matrix "${OUTPUT_DIR}/diversity/unweighted_unifrac_distance_matrix.qza" \
+        --o-pcoa "${OUTPUT_DIR}/diversity/unweighted_unifrac_pcoa.qza" || \
+        log "Warning: Failed to run PCoA for unweighted UniFrac"
+
+    qiime emperor plot \
+        --i-pcoa "${OUTPUT_DIR}/diversity/unweighted_unifrac_pcoa.qza" \
+        --m-metadata-file "${METADATA_PATH}" \
+        --o-visualization "${OUTPUT_DIR}/diversity/unweighted_unifrac_emperor.qzv" || \
+        log "Warning: Failed to generate Emperor plot for unweighted UniFrac"
     
-    # If core metrics failed, calculate basic metrics without rarefaction as fallback
-    if [[ "${CORE_METRICS_SUCCESS}" == "false" ]]; then
-        log "Calculating fallback diversity metrics without rarefaction..."
-        mkdir -p "${OUTPUT_DIR}/diversity/no-rarefaction"
-        
-        # Alpha diversity metrics
-        for metric in shannon observed_features; do
-            log "Calculating ${metric}..."
-            qiime diversity alpha \
-                --i-table "${TABLE_PATH}" \
-                --p-metric "${metric}" \
-                --o-alpha-diversity "${OUTPUT_DIR}/diversity/no-rarefaction/${metric}_vector.qza" || \
-                log "Warning: Failed to calculate ${metric}"
-        done
-        
-        # Faith's PD (requires phylogenetic tree)
-        log "Calculating Faith's PD..."
-        qiime diversity alpha-phylogenetic \
-            --i-table "${TABLE_PATH}" \
-            --i-phylogeny "${OUTPUT_DIR}/rooted-tree.qza" \
-            --p-metric faith_pd \
-            --o-alpha-diversity "${OUTPUT_DIR}/diversity/no-rarefaction/faith_pd_vector.qza" || \
-            log "Warning: Failed to calculate Faith's PD"
-        
-        log "Note: Beta diversity metrics skipped due to insufficient samples for PCoA"
-        log "You need at least 3 samples to calculate beta diversity with ordination"
-    fi
+    log "Exporting unweighted UniFrac PCoA results..."
+    qiime tools export \
+        --input-path "${OUTPUT_DIR}/diversity/unweighted_unifrac_pcoa.qza" \
+        --output-path "${OUTPUT_DIR}/diversity/exported-unweighted_unifrac-pcoa" || \
+        log "Warning: Failed to export unweighted UniFrac PCoA"
     
     # Create visualizations for additional metrics
     if [[ -n "${METADATA_PATH}" ]]; then
