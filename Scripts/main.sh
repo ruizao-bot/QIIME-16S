@@ -312,8 +312,8 @@ step4_remove_primers() {
         --i-demultiplexed-sequences "${DEMUX_PATH}" \
         --p-front-f "${PRIMER_F}" \
         --p-front-r "${PRIMER_R}" \
-        --p-discard-untrimmed \
-        --p-no-indels \
+        --p-match-read-wildcards \
+        --p-match-adapter-wildcards \
         --o-trimmed-sequences Data/processed_data/demux-trimmed.qza \
         --verbose || error_exit "Primer removal failed"
 
@@ -421,8 +421,8 @@ step5_dada2_denoising() {
         --i-demultiplexed-seqs "${DEMUX_PATH}" \
         --p-trunc-len-f "${TRUNC_LEN_F}" \
         --p-trunc-len-r "${TRUNC_LEN_R}" \
-        --p-trim-left-f 19 \
-        --p-trim-left-r 20 \
+        --p-trim-left-f 0 \
+        --p-trim-left-r 0 \
         --p-n-threads "${N_THREADS}" \
         --o-table Results/denoise_mode/table.qza \
         --o-representative-sequences Results/denoise_mode/rep-seqs.qza \
@@ -1206,7 +1206,7 @@ step7_taxonomic_classification() {
         --output-path "${OUTPUT_DIR}/exported-taxonomy" || \
         log "Warning: Failed to export taxonomy table"
     
-    create_checkpoint "step6_taxonomic_classification"
+    create_checkpoint "step7_taxonomic_classification"
     
     echo ""
     echo "=================================================="
@@ -1796,7 +1796,8 @@ usage() {
     echo "  - step5_dada2_denoising"
     echo "  - step5_cluster_from_demux"
     echo "  - step6_decontamination"
-    echo "  - step8_taxonomic_classification"
+    echo "  - step7_taxonomic_classification"
+    echo "  - step8_diversity_analysis"
 }
 
 # Status function
