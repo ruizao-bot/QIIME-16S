@@ -39,7 +39,9 @@ metadata <- read.table(
   row.names = 1,
   comment.char = ""
 )
-metadata <- metadata[colnames(feature_table), ]
+# Do not subset metadata by feature table columns. 
+# Keep full metadata to support PCoA plotting of all samples in the ordination file.
+# metadata <- metadata[colnames(feature_table), ]
 
 # Parse taxonomy
 parse_taxonomy <- function(tax_string) {
@@ -180,138 +182,135 @@ run_analysis <- function(ft, tt, meta, output_prefix, dataset_name) {
   print(p_alpha)
   ggsave(paste0(output_prefix, "_alpha_diversity_boxplot.pdf"), p_alpha, width = 10, height = 4)
   cat("Alpha diversity boxplot saved\n")
+
+  # --- PCoA and PERMANOVA (Global Unweighted UniFrac) ---
+  # Note: This uses the global ordination/distance matrix, not specific to the subset (Bacteria/Archaea)
+  # unless those files are updated. We run this block to visualize the provided QIIME2 results.
   
-  # PCoA ordination using Unweighted UniFrac from QIIME2
-  cat("\n=== PCoA with Unweighted UniFrac ===\n")
+  cat("\n=== PCoA with Unweighted UniFrac (QIIME2) ===\n")
   
   unweighted_pcoa_file <- "Results/denoise_mode/diversity/exported-unweighted_unifrac-pcoa/ordination.txt"
   unweighted_dist_file <- "Results/denoise_mode/diversity/unweighted_unifrac_exported/distance-matrix.tsv"
   
-  # Parse QIIME2 ordination file
-  lines <- readLines(unweighted_pcoa_file)
-  prop_idx <- grep("^Proportion", lines)
-  site_idx <- grep("^Site", lines)
+  if (file.exists(unweighted_pcoa_file)) {
+    # Robust Parsing of QIIME2 ordination file
+    lines <- readLines(unweighted_pcoa_file)
+    prop_idx_all <- grep("^Proportion", lines)
+    site_idx_all <- grep("^Site", lines)
+    
+    if (length(prop_idx_all) > 0 && length(site_idx_all) > 0) {
+      prop_idx <- prop_idx_all[1]
+      site_idx <- site_idx_all[1]
+      
+      # Parse Proportion Explained
+      prop_line_idx <- prop_idx + 1
+      while(prop_line_idx <= length(lines) && nchar(trimws(lines[prop_line_idx])) == 0) prop_line_idx <- prop_line_idx + 1
+      prop_tokens <- unlist(strsplit(lines[prop_line_idx], "[\t ]+"))
+      prop_tokens <- prop_tokens[prop_tokens != ""]
+      percent_var <- round(as.numeric(prop_tokens) * 100, 2)
+      
+      # Parse Site Coordinates
+      coord_start <- site_idx + 1
+      # Find end of coordinate block (first blank line after start)
+      blank_lines <- which(nchar(trimws(lines)) == 0)
+      coord_end <- if (any(blank_lines > coord_start)) min(blank_lines[blank_lines > coord_start]) - 1 else length(lines)
+      
+      coord_lines <- lines[coord_start:coord_end]
+      coord_lines <- coord_lines[nzchar(trimws(coord_lines))]
+      
+      if (length(coord_lines) > 0) {
+        coord_tab <- read.table(text = paste(coord_lines, collapse = "\n"), header = FALSE, stringsAsFactors = FALSE, fill = TRUE)
+        # Expecting SampleID, PC1, PC2, ...
+        pcoa_scores <- data.frame(
+          Sample = coord_tab[, 1],
+          PC1 = as.numeric(coord_tab[, 2]),
+          PC2 = as.numeric(coord_tab[, 3]),
+          stringsAsFactors = FALSE
+        )
+        
+        # Merge with Metadata (Left Join to keep all ordination samples)
+        # We use the full 'metadata' object (which is now not subsetted)
+        meta_df <- data.frame(Sample = rownames(metadata), metadata, stringsAsFactors = FALSE)
+        plot_data <- merge(pcoa_scores, meta_df, by = "Sample", all.x = TRUE)
+        
+        # Handle missing metadata for plotting
+        if (!"sample_type" %in% colnames(plot_data)) plot_data$sample_type <- NA
+        if (!"species" %in% colnames(plot_data)) plot_data$species <- NA
+        
+        plot_data$sample_type[is.na(plot_data$sample_type)] <- "Unknown"
+        plot_data$species[is.na(plot_data$species)] <- "Unknown"
+        
+        # Plot PCoA
+        p_pcoa <- ggplot(plot_data, aes(x = PC1, y = PC2, color = sample_type, shape = species)) +
+          geom_point(size = 4, alpha = 0.8) +
+          theme_bw() +
+          labs(
+            title = paste("PCoA - Unweighted UniFrac (QIIME2)"),
+            subtitle = paste("Dataset context:", dataset_name),
+            x = paste0("PC1 (", percent_var[1], "%)"),
+            y = paste0("PC2 (", percent_var[2], "%)"),
+            color = "Sample Type",
+            shape = "Species"
+          ) +
+          theme(plot.title = element_text(hjust = 0.5))
+        
+        ggsave(paste0(output_prefix, "_pcoa_unweighted_unifrac.pdf"), p_pcoa, width = 10, height = 7)
+        cat("PCoA plot saved to:", paste0(output_prefix, "_pcoa_unweighted_unifrac.pdf\n"))
+        
+        # Save Scores
+        write.table(plot_data, paste0(output_prefix, "_pcoa_scores.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+      }
+    }
+  } else {
+    cat("Ordination file not found:", unweighted_pcoa_file, "\n")
+  }
   
-  percent_var <- round(as.numeric(lines[(prop_idx + 1):(site_idx - 1)]) * 100, 2)
-  
-  coord_lines <- lines[(site_idx + 1):length(lines)]
-  coord_lines <- coord_lines[coord_lines != ""]
-  
-  coord_matrix <- do.call(rbind, strsplit(coord_lines, "\\t"))
-  pcoa_scores <- data.frame(
-    Sample = coord_matrix[, 1],
-    PC1 = as.numeric(coord_matrix[, 2]),
-    PC2 = as.numeric(coord_matrix[, 3]),
-    stringsAsFactors = FALSE
-  )
-  rownames(pcoa_scores) <- pcoa_scores$Sample
-  
-  # Only keep samples that exist in metadata
-  common_samples <- intersect(pcoa_scores$Sample, rownames(meta))
-  pcoa_scores <- pcoa_scores[common_samples, ]
-  pcoa_scores <- cbind(pcoa_scores, meta[pcoa_scores$Sample, ])
-  
-  # Read distance matrix for PERMANOVA
-  unifrac_dist_data <- read.table(unweighted_dist_file, sep = "\t", header = TRUE, row.names = 1)
-  unifrac_dist_data <- unifrac_dist_data[common_samples, common_samples]
-  pcoa_dist <- as.dist(unifrac_dist_data)
-  
-  cat("Using QIIME2 Unweighted UniFrac results\n")
-  
-  # Plot PCoA
-  cat("\n=== Plotting PCoA ===\n")
-  
-  p_pcoa <- ggplot(pcoa_scores, aes(x = PC1, y = PC2, color = sample_type, shape = species)) +
-    geom_point(size = 4, alpha = 0.8) +
-    theme_bw() +
-    labs(
-      title = paste("PCoA - Unweighted UniFrac -", dataset_name),
-      x = paste0("PC1 (", percent_var[1], "%)"),
-      y = paste0("PC2 (", percent_var[2], "%)"),
-      color = "Sample Type",
-      shape = "Species"
-    ) +
-    theme(
-      legend.position = "right",
-      plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
-    )
-  
-  print(p_pcoa)
-  ggsave(paste0(output_prefix, "_pcoa_unweighted_unifrac.pdf"), p_pcoa, width = 10, height = 7)
-  cat("PCoA plot saved to:", paste0(output_prefix, "_pcoa_unweighted_unifrac.pdf\n"))
-  
-  
-  # PERMANOVA analysis
+  # --- PERMANOVA ---
   cat("\n=== PERMANOVA Analysis ===\n")
-  
-  # Ensure metadata matches distance matrix samples
-  dist_samples <- labels(pcoa_dist)
-  meta_subset <- meta[dist_samples, ]
-  
-  # Run tests
-  if (length(unique(meta_subset$species)) > 1) {
-    permanova_species <- adonis2(pcoa_dist ~ species, data = meta_subset, permutations = 999)
-    cat("\n1. Tree Species Effect:\n")
-    print(permanova_species)
-  }
-  
-  if (length(unique(meta_subset$sample_type)) > 1) {
-    permanova_tissue <- adonis2(pcoa_dist ~ sample_type, data = meta_subset, permutations = 999)
-    cat("\n2. Tissue Effect:\n")
-    print(permanova_tissue)
-  }
-  
-  if (length(unique(meta_subset$species)) > 1 && length(unique(meta_subset$sample_type)) > 1) {
-    permanova_combined <- adonis2(pcoa_dist ~ species + sample_type, data = meta_subset, permutations = 999)
-    cat("\n3. Combined Effect:\n")
-    print(permanova_combined)
+  if (file.exists(unweighted_dist_file)) {
+    dist_mat <- read.table(unweighted_dist_file, header = TRUE, sep = "\t", row.names = 1, check.names = FALSE)
     
-    permanova_interaction <- adonis2(pcoa_dist ~ species * sample_type, data = meta_subset, permutations = 999)
-    cat("\n4. Interaction Effect:\n")
-    print(permanova_interaction)
-  }
-  
-  # Save results
-  sink(paste0(output_prefix, "_PERMANOVA_results.txt"))
-  cat("PERMANOVA Test Results -", dataset_name, "\n")
-  cat("Date:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
-  cat("Distance metric: Unweighted UniFrac\n")
-  cat("Permutations: 999\n\n")
-  cat(paste(rep("=", 70), collapse = ""), "\n\n")
-  
-  if (length(unique(meta$species)) > 1) {
-    cat("1. Tree Species Effect (dm ~ tree_species):\n")
-    print(permanova_species)
-    cat("\n")
-  }
-  
-  if (length(unique(meta$sample_type)) > 1) {
-    cat("2. Tissue Effect (dm ~ tissue):\n")
-    print(permanova_tissue)
-    cat("\n")
-  }
-  
-  if (length(unique(meta$species)) > 1 && length(unique(meta$sample_type)) > 1) {
-    cat("3. Combined Effect (dm ~ tree_species + tissue):\n")
-    print(permanova_combined)
-    cat("\n")
+    # Intersect samples between distance matrix and metadata
+    # We need valid metadata for PERMANOVA factors
+    common_samples <- intersect(rownames(dist_mat), rownames(metadata))
     
-    cat("4. Interaction Effect (dm ~ tree_species * tissue):\n")
-    print(permanova_interaction)
-    cat("\n")
+    # Filter out samples with NA in key columns if necessary, or just use common ones
+    # Here we just use samples present in both.
+    
+    if (length(common_samples) > 0) {
+      dist_subset <- as.dist(dist_mat[common_samples, common_samples])
+      meta_subset <- metadata[common_samples, , drop = FALSE]
+      
+      sink(paste0(output_prefix, "_PERMANOVA_results.txt"))
+      cat("PERMANOVA Results (Unweighted UniFrac)\n")
+      cat("Samples used:", length(common_samples), "\n\n")
+      
+      # Test Species
+      if ("species" %in% colnames(meta_subset) && length(unique(meta_subset$species)) > 1) {
+        cat("--- Effect of Species ---\n")
+        tryCatch({
+          print(adonis2(dist_subset ~ species, data = meta_subset, permutations = 999))
+        }, error = function(e) cat("Error running PERMANOVA on species:", e$message, "\n"))
+        cat("\n")
+      }
+      
+      # Test Sample Type
+      if ("sample_type" %in% colnames(meta_subset) && length(unique(meta_subset$sample_type)) > 1) {
+        cat("--- Effect of Sample Type ---\n")
+        tryCatch({
+          print(adonis2(dist_subset ~ sample_type, data = meta_subset, permutations = 999))
+        }, error = function(e) cat("Error running PERMANOVA on sample_type:", e$message, "\n"))
+        cat("\n")
+      }
+      
+      sink()
+      cat("PERMANOVA results saved to:", paste0(output_prefix, "_PERMANOVA_results.txt\n"))
+    } else {
+      cat("No common samples between distance matrix and metadata for PERMANOVA.\n")
+    }
+  } else {
+    cat("Distance matrix file not found:", unweighted_dist_file, "\n")
   }
-  
-  cat(paste(rep("=", 70), collapse = ""), "\n")
-  cat("\nInterpretation:\n")
-  cat("- Pr(>F) < 0.001: *** (highly significant)\n")
-  cat("- Pr(>F) < 0.01:  **  (significant)\n")
-  cat("- Pr(>F) < 0.05:  *   (marginally significant)\n")
-  cat("- Pr(>F) >= 0.05: not significant\n\n")
-  cat("PERMANOVA tests whether community composition differs significantly between groups.\n")
-  cat("R² represents the proportion of variance explained by each factor.\n")
-  sink()
-  
-  cat("PERMANOVA results saved to file\n")
   
   cat("\n", dataset_name, "analysis complete\n")
 }

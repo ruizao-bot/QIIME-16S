@@ -1599,6 +1599,26 @@ step8_diversity_analysis() {
     echo "All TSV files are ready for analysis in R, Python, or Excel"
     echo ""
     
+    # Export representative sequences for downstream analysis (e.g., PICRUSt2, phylogenetic placement)
+    log "Exporting representative sequences for downstream analysis..."
+    echo ""
+    echo "Exporting representative sequences for downstream analysis..."
+    
+    if [[ -f "Results/denoise_mode/rep-seqs-no-contam.qza" ]]; then
+        qiime tools export \
+            --input-path Results/denoise_mode/rep-seqs-no-contam.qza \
+            --output-path Results/denoise_mode/exported-rep-seqs || \
+            log "Warning: Failed to export representative sequences"
+        
+        if [[ -f "Results/denoise_mode/exported-rep-seqs/dna-sequences.fasta" ]]; then
+            echo "Representative sequences exported to: Results/denoise_mode/exported-rep-seqs/dna-sequences.fasta"
+            log "Representative sequences exported successfully"
+        fi
+    else
+        log "Warning: rep-seqs-no-contam.qza not found. Skipping export."
+    fi
+    echo ""
+    
     pause_script "Diversity Analysis" "Diversity analysis complete. All results exported to TSV format!"
 }
 
@@ -2013,7 +2033,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
-        # positional: start step (1-7)
+        # positional: start step (1-9)
         [1-7])
             START_STEP="$1"
             shift
