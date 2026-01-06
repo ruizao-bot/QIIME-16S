@@ -230,7 +230,7 @@ The shotgun pipeline consists of the following steps:
   - `Data/processed_data/contig-map.qza` (mapping of contigs to bins)
   - `Data/processed_data/unbinned-contigs.qza` (contigs that couldn't be binned)
 - **Algorithm**: MetaBAT2 (uses tetranucleotide frequency and coverage depth)
-- **Default Parameters**: minContig=2500 bp, minCV=1.0, minCVSum=1.0, maxP=95%, minS=60, maxEdges=200, minClsSize=200000
+- **Default Parameters**: minContig=1000 bp, minCV=1.0, minCVSum=1.0, maxP=95%, minS=60, maxEdges=200, minClsSize=200000
 - **Notes**: 
   - MAG quality depends on contig length and coverage. Low-coverage samples may produce few or no MAGs.
   - If no MAGs are formed, check: (1) contig length distribution, (2) read mapping percentage, (3) sample complexity
@@ -307,7 +307,7 @@ rm -f Data/processed_data/demux-paired-end.qza \
 ### Troubleshooting
 
 **No MAGs formed during binning:**
-- Check contig length: MetaBAT2 requires contigs ≥2500 bp by default
+- Check contig length: MetaBAT2 now requires contigs ≥1000 bp (as set in this pipeline)
 - Verify read mapping percentage: Low percentage (<1%) indicates assembly issues
 - Assess sequencing depth: Deep sequencing improves assembly and binning
 - Review assembly quality: Poor assembly produces fragmented contigs that cannot be binned

@@ -227,6 +227,7 @@ step5_bin_contigs() {
     qiime annotate bin-contigs-metabat \
         --i-contigs "${PROCESSED_DATA_DIR}/assembled-contigs.qza" \
         --i-alignment-maps "${PROCESSED_DATA_DIR}/mapped-reads.qza" \
+        --p-min-contig 1000 \
         --o-mags "${PROCESSED_DATA_DIR}/binned-contigs.qza" \
         --o-contig-map "${PROCESSED_DATA_DIR}/contig-map.qza" \
         --o-unbinned-contigs "${PROCESSED_DATA_DIR}/unbinned-contigs.qza" || \
