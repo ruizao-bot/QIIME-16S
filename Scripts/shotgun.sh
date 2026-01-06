@@ -6,6 +6,7 @@
 
 set -euo pipefail  # Exit on error, undefined variables, and pipe failures
 
+eval "$(conda shell.bash hook)"
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -17,6 +18,9 @@ METADATA_FILE="${DATA_DIR}/metadata/metadata.tsv"
 MANIFEST_FILE="${RAW_DATA_DIR}/manifest.tsv"
 LOG_FILE="${PROJECT_DIR}/Logs/shotgun_pipeline.log"
 ENV_NAME="qiime2-moshpit"
+
+# Activate qiime2-moshpit environment at the beginning of the script
+conda activate qiime2-moshpit
 
 # Create necessary directories
 mkdir -p "${PROCESSED_DATA_DIR}"
@@ -44,6 +48,27 @@ check_skip() {
     return 1  # Don't skip
 }
 
+# Step 0: Run FastQC on raw data
+step0_fastqc_raw() {
+    log "Starting Step 0: Running FastQC on raw data"
+
+    # Activate qc_env environment
+    conda activate qc_env
+
+    # Create output directory for FastQC reports
+    FASTQC_RAW_OUTPUT_DIR="${PROJECT_DIR}/Data/fastqc_raw_reports"
+    mkdir -p "${FASTQC_RAW_OUTPUT_DIR}"
+
+    # Run FastQC on .fastq.gz files
+    fastqc -o "${FASTQC_RAW_OUTPUT_DIR}" "${RAW_DATA_DIR}"/*.fastq.gz || \
+        error_exit "Failed to run FastQC on raw data."
+
+    # Switch back to qiime2-moshpit environment
+    conda activate qiime2-moshpit
+
+    log "FastQC completed successfully on raw data. Reports saved in ${FASTQC_RAW_OUTPUT_DIR}"
+}
+
 # Step 1: Import Data
 step1_import_data() {
     log "Starting Step 1: Importing shotgun data"
@@ -69,22 +94,54 @@ step1_import_data() {
     log "Data imported successfully. Output: ${PROCESSED_DATA_DIR}/demux-paired-end.qza"
 }
 
-# Step 2: Quality Control (Updated to trim adapters)
+# Step 2: Quality Control (Trim primers and adapters)
 step2_quality_control() {
-    log "Starting Step 2: Quality control (Trimming adapters)"
+    log "Starting Step 2: Quality control (Trimming primers and adapters)"
     
     # Check if already completed
     if check_skip "${PROCESSED_DATA_DIR}/trimmed-seqs.qza" "Step 2"; then
         return 0
     fi
 
+    # Primer sequences from control script
+    # Forward primer: 799F (AACMGGATTAGATACCCKG)
+    # Reverse primer: 1193R (ACGTCATCCCCACCTTCC)
     qiime cutadapt trim-paired \
         --i-demultiplexed-sequences "${PROCESSED_DATA_DIR}/demux-paired-end.qza" \
+        --p-front-f AACMGGATTAGATACCCKG \
+        --p-front-r ACGTCATCCCCACCTTCC \
+        --p-discard-untrimmed \
         --p-cores 4 \
         --o-trimmed-sequences "${PROCESSED_DATA_DIR}/trimmed-seqs.qza" || \
-        error_exit "Failed to trim adapters."
+        error_exit "Failed to trim primers and adapters."
 
-    log "Adapters trimmed successfully. Output: ${PROCESSED_DATA_DIR}/trimmed-seqs.qza"
+    log "Primers and adapters trimmed successfully. Output: ${PROCESSED_DATA_DIR}/trimmed-seqs.qza"
+}
+
+# Ensure QIIME2 environment is activated before running `qiime` commands
+step2b_fastqc_trimmed() {
+    log "Starting Step 2b: Running FastQC on trimmed data"
+
+    # Create output directory for FastQC reports
+    FASTQC_TRIMMED_OUTPUT_DIR="${PROJECT_DIR}/Data/fastqc_trimmed_reports"
+    mkdir -p "${FASTQC_TRIMMED_OUTPUT_DIR}"
+
+    # Export trimmed sequences to FASTQ format for FastQC (using qiime2-moshpit environment)
+    conda activate qiime2-moshpit
+    qiime tools export \
+        --input-path "${PROCESSED_DATA_DIR}/trimmed-seqs.qza" \
+        --output-path "${FASTQC_TRIMMED_OUTPUT_DIR}/exported_trimmed_seqs" || \
+        error_exit "Failed to export trimmed sequences for FastQC."
+
+    # Switch to qc_env for FastQC
+    conda activate qc_env
+    fastqc -o "${FASTQC_TRIMMED_OUTPUT_DIR}" "${FASTQC_TRIMMED_OUTPUT_DIR}/exported_trimmed_seqs"/*.fastq || \
+        error_exit "Failed to run FastQC on trimmed data."
+
+    # Switch back to qiime2-moshpit
+    conda activate qiime2-moshpit
+
+    log "FastQC completed successfully on trimmed data. Reports saved in ${FASTQC_TRIMMED_OUTPUT_DIR}"
 }
 
 # Step 3: Remove Host DNA
@@ -150,9 +207,9 @@ step4b_map_reads() {
 
     # Map reads to contigs
     qiime assembly map-reads \
-        --i-indexed-contigs "${PROCESSED_DATA_DIR}/contigs-index.qza" \
+        --i-index "${PROCESSED_DATA_DIR}/contigs-index.qza" \
         --i-reads "${PROCESSED_DATA_DIR}/host-removed-seqs.qza" \
-        --o-alignment-map "${PROCESSED_DATA_DIR}/mapped-reads.qza" || \
+        --o-alignment-maps "${PROCESSED_DATA_DIR}/mapped-reads.qza" || \
         error_exit "Failed to map reads to contigs."
 
     log "Reads mapped successfully. Output: ${PROCESSED_DATA_DIR}/mapped-reads.qza"
@@ -169,8 +226,10 @@ step5_bin_contigs() {
 
     qiime annotate bin-contigs-metabat \
         --i-contigs "${PROCESSED_DATA_DIR}/assembled-contigs.qza" \
-        --i-maps "${PROCESSED_DATA_DIR}/mapped-reads.qza" \
-        --o-mags "${PROCESSED_DATA_DIR}/binned-contigs.qza" || \
+        --i-alignment-maps "${PROCESSED_DATA_DIR}/mapped-reads.qza" \
+        --o-mags "${PROCESSED_DATA_DIR}/binned-contigs.qza" \
+        --o-contig-map "${PROCESSED_DATA_DIR}/contig-map.qza" \
+        --o-unbinned-contigs "${PROCESSED_DATA_DIR}/unbinned-contigs.qza" || \
         error_exit "Failed to bin contigs."
 
     log "Contigs binned successfully. Output: ${PROCESSED_DATA_DIR}/binned-contigs.qza"
@@ -244,12 +303,37 @@ step7c_annotate_mags() {
     log "MAGs annotated successfully. Output: ${PROCESSED_DATA_DIR}/mags-annotations.qza"
 }
 
+# Parse arguments
+TEST_MODE=false
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --test)
+            TEST_MODE=true
+            shift
+            ;;
+        *)
+            log "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Adjust directories for test mode
+if $TEST_MODE; then
+    log "Running in test mode. Using test dataset."
+    RAW_DATA_DIR="${DATA_DIR}/raw_data/shotgun_test"
+    PROCESSED_DATA_DIR="${DATA_DIR}/processed_data_test"
+    mkdir -p "${RAW_DATA_DIR}" "${PROCESSED_DATA_DIR}"
+fi
+
 # Main Pipeline Execution (Updated)
 main() {
     log "Starting QIIME2 Shotgun Data Analysis Pipeline"
 
+    step0_fastqc_raw
     step1_import_data
     step2_quality_control
+    step2b_fastqc_trimmed
     step3_remove_host
     step4_assemble_contigs
     step4b_map_reads
