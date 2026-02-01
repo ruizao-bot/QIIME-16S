@@ -1,0 +1,97 @@
+===================================================================
+METHANE METABOLISM GENE SEARCH RESULTS - Sample 53394
+===================================================================
+Analysis Date: 2025
+Search Tool: DIAMOND v2.1.19 blastx
+Database: methane_master_db (101,573 sequences)
+Search Parameters:
+  - Query coverage: >80%
+  - Bit score: >40
+  - E-value: <1e-5
+  - Max target sequences: 5
+  - Mode: sensitive
+
+===================================================================
+RESULTS SUMMARY
+===================================================================
+
+R1 Reads (trimmed_R1.fastq.gz):
+  Total alignments: 26,350
+  Aligned queries: 28,116
+  
+  Methane-specific genes:
+    - Methane monooxygenase (MMO): 180 hits
+    - PmoA family proteins (pMMO): 200 hits
+    - mcrA (methanogens): 0 hits
+  
+R2 Reads (trimmed_R2.fastq.gz):
+  Total alignments: 21,678
+  Aligned queries: 27,880
+  
+  Methane-specific genes:
+    - Methane monooxygenase (MMO): 94 hits
+    - PmoA family proteins (pMMO): 176 hits
+    - mcrA (methanogens): 0 hits
+
+===================================================================
+COMBINED TOTALS (R1 + R2):
+===================================================================
+  Total methane monooxygenase hits: 274
+  Total PmoA family protein hits: 376
+  Total methanotroph gene hits: 650
+  Total methanogen (mcrA) hits: 0
+
+===================================================================
+BIOLOGICAL INTERPRETATION
+===================================================================
+
+✓ METHANOTROPHS DETECTED
+  Sample 53394 contains aerobic methane-oxidizing bacteria (methanotrophs).
+  Key enzymes detected:
+  - pMMO (particulate methane monooxygenase): Primary methane oxidation enzyme
+  - MMO (soluble methane monooxygenase): Alternative methane oxidation pathway
+  
+  These organisms consume methane (CH4) as their carbon and energy source,
+  converting it to methanol and subsequently to CO2.
+
+✗ METHANOGENS NOT DETECTED
+  No mcrA (methyl-coenzyme M reductase) genes detected.
+  This indicates sample does not contain significant populations of
+  methanogenic archaea that produce methane.
+
+===================================================================
+ECOLOGICAL SIGNIFICANCE
+===================================================================
+
+The presence of methanotrophs without methanogens suggests:
+1. Sample may be from an oxic environment (aerobic methane oxidation)
+2. Potential methane sink rather than methane source
+3. Could be from interface zones where methane from deeper layers
+   is oxidized by aerobic bacteria
+
+Common methanotroph habitats:
+- Wetlands and rice paddies (oxic surface layers)
+- Landfill cover soils
+- Lake/ocean sediment interfaces
+- Forest soils with CH4 from deeper anaerobic zones
+
+===================================================================
+NEXT STEPS
+===================================================================
+
+1. Identify specific methanotroph genera:
+   - Extract taxonomy from hit sequences
+   - Common genera: Methylobacter, Methylomonas, Methylococcus (Type I)
+   - Methylosinus, Methylocystis (Type II)
+
+2. Analyze gene diversity:
+   - Count unique PmoA sequences
+   - Build phylogenetic tree of detected genes
+
+3. Compare with SingleM taxonomic profile:
+   - Cross-reference with detected Methylobacterium/Methylovirgula
+
+4. Quantify expression:
+   - If RNA-seq data available, check transcription levels
+
+===================================================================

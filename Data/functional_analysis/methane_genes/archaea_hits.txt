@@ -1,0 +1,2 @@
+S3.18.EIF_2_alpha	trimmed_R1	GGCGCGTTTGTCGAGCTCGAGCAGGGG------ATTGAAGGTCTCGTTCACGTCTCCGAG	1	1.55	Root; d__Archaea; p__Thermoproteota; c__Nitrososphaeria_A; o__Caldarchaeales; f__Caldarchaeaceae; g__Caldarchaeum
+S3.23.KOW_elon_Spt5	trimmed_R1	GTGAATGGGGCCTATAGGGGAGCGACTGCCAAGCTGTTGGGTGTGGACACGGACAAGTTC	1	1.65	Root; d__Archaea; p__Thermoplasmatota; c__Thermoplasmata; o__Thermoplasmatales; f__Thermoplasmataceae; g__JAKAFX01

@@ -6,9 +6,13 @@ library(dplyr)
 # ---------------------------------------------------------
 # 1. Setup & Data Loading
 # ---------------------------------------------------------
+# Set base directory
+base_dir <- "/Users/jiayi/Desktop/metagenomic_pipeline/QIIME"
+setwd(base_dir)
+
 # Load metadata and pathway abundance
-abundance_file <- "/Users/jiayi/Desktop/metagenomic_pipeline/QIIME/picrust2_output_final/pathways_out/path_abun_unstrat.tsv"
-metadata_file <- "/Users/jiayi/Desktop/metagenomic_pipeline/QIIME/Data/metadata/metadata.tsv"
+abundance_file <- file.path(base_dir, "picrust2_output_final/pathways_out/path_abun_unstrat.tsv")
+metadata_file <- file.path(base_dir, "Data/metadata/metadata.tsv")
 
 # Read data
 metadata <- read_delim(metadata_file, delim = "\t", trim_ws = TRUE)
@@ -18,7 +22,7 @@ abundance <- read_delim(abundance_file, delim = "\t", trim_ws = TRUE) %>%
 # Filter samples to match metadata
 clean_metadata <- metadata %>% filter(control_status == "sample")
 common_samples <- intersect(colnames(abundance), clean_metadata$`sample-id`)
-abundance <- abundance %>% select(all_of(common_samples))
+abundance <- abundance %>% dplyr::select(dplyr::all_of(common_samples))
 
 cat("Loaded data: ", ncol(abundance), "samples.\n")
 
@@ -58,6 +62,8 @@ load_desc <- function(path) if(file.exists(path)) read_tsv(path, col_names = c("
 enzyme_descriptions <- bind_rows(load_desc("picrust2_output_final/ko_info.tsv.gz"), load_desc("picrust2_output_final/ec_level4_info.tsv.gz")) %>%
   mutate(ID = gsub("^EC:", "", ID), ID = gsub("^ko:", "", ID))
 
+cat("Loaded", nrow(enzyme_descriptions), "enzyme descriptions (KO + EC)\n")
+
 # Manual additions
 manual_desc <- data.frame(
   ID = c("2.1.1.21"),
@@ -77,7 +83,11 @@ save_abundance <- function(data, features, type_name, id_col, output_prefix) {
     # Add descriptions if available
     found_data_desc <- found_data %>%
       left_join(enzyme_descriptions, by = setNames("ID", id_col)) %>%
-      select(all_of(id_col), Description, everything())
+      dplyr::select(dplyr::all_of(id_col), Description, everything())
+    
+    # Report matching statistics
+    n_matched <- sum(!is.na(found_data_desc$Description))
+    cat("  ", n_matched, "/", nrow(found_data_desc), id_col, "entries matched with descriptions\n")
     
     # Save
     outfile <- paste0("picrust2_output_final/", output_prefix, "_abundance.csv")

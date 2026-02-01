@@ -223,18 +223,30 @@ The shotgun pipeline consists of the following steps:
 - **Notes**: Coverage information is essential for binning in Step 5. Higher coverage contigs are more reliable.
 
 **Step 5: Bin Contigs (MAG Generation)**
-- **Purpose**: Group contigs into Metagenome-Assembled Genomes (MAGs) based on sequence composition and coverage patterns using MetaBAT2
+- **Purpose**: Group contigs into Metagenome-Assembled Genomes (MAGs) using per-sample binning strategy with MaxBin2
 - **Inputs**: `assembled-contigs.qza` from Step 4, `mapped-reads.qza` from Step 4b
 - **Outputs**: 
-  - `Data/processed_data/binned-contigs.qza` (MAGs)
-  - `Data/processed_data/contig-map.qza` (mapping of contigs to bins)
-  - `Data/processed_data/unbinned-contigs.qza` (contigs that couldn't be binned)
-- **Algorithm**: MetaBAT2 (uses tetranucleotide frequency and coverage depth)
-- **Default Parameters**: minContig=1000 bp, minCV=1.0, minCVSum=1.0, maxP=95%, minS=60, maxEdges=200, minClsSize=200000
+  - `Data/processed_data/binned-contigs.qza` (all MAGs from all samples)
+  - `Data/processed_data/maxbin2_work/` (per-sample MaxBin2 intermediate files)
+- **Algorithm**: MaxBin2 (external tool, uses tetranucleotide frequency, marker genes, and coverage depth)
+- **Parameters**: min_contig_length=1000 bp, thread=8 per sample
+- **Strategy**: Per-sample binning (each sample processed independently)
+- **Process**:
+  1. Export contigs and alignment maps from QIIME2 format
+  2. For each sample:
+     - Sort sample BAM file
+     - Generate sample-specific depth file
+     - Run MaxBin2 with 1000 bp minimum
+     - Collect resulting bins
+  3. Merge all bins from all samples
+  4. Import combined bins to QIIME2 as MAG collection
 - **Notes**: 
-  - MAG quality depends on contig length and coverage. Low-coverage samples may produce few or no MAGs.
-  - If no MAGs are formed, check: (1) contig length distribution, (2) read mapping percentage, (3) sample complexity
-  - Common causes of failure: insufficient sequencing depth, highly diverse communities, poor assembly quality
+  - Uses per-sample binning to handle independently assembled contigs
+  - Avoids reference mismatch errors by processing each sample separately
+  - MAG quality depends on contig length and coverage per sample
+  - If a sample produces no MAGs, it's skipped (other samples continue)
+  - Total bins reported across all samples
+  - MaxBin2 working directory preserved for troubleshooting
 
 **Step 6: Evaluate MAGs**
 - **Purpose**: Assess completeness and contamination of MAGs using BUSCO (Benchmarking Universal Single-Copy Orthologs)
