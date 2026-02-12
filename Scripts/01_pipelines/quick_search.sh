@@ -1,17 +1,100 @@
 #!/bin/bash
 
 ################################################################################
-# Quick Metagenomic Analysis Pipeline
-# Automated workflow for shotgun metagenomic analysis
+# Quick Metagenomic Search Pipeline - Methane Gene Detection
 ################################################################################
-# Steps:
-# 1. BBduk quality control
-# 2. SingleM taxonomic profiling (OTU generation)
-# 3. DIAMOND functional gene search (methane metabolism genes)
+# 
+# PURPOSE:
+#   Fast detection and quantification of methane metabolism genes in shotgun
+#   metagenomic data. Identifies methanotrophs (methane oxidizers) and 
+#   methanogens (methane producers).
+#
+# WORKFLOW:
+#   1. BBduk - Quality control and adapter trimming
+#   2. SingleM - Taxonomic profiling using 16S marker genes
+#   3. DIAMOND - Functional gene search (pmoA, mmoX, mcrA, etc.)
+#   4. Quantification - Gene abundance and RPKM normalization
+#
+# REQUIREMENTS:
+#   • Conda environment: quick_search
+#     - BBMap (bbduk.sh)
+#     - SingleM (with hmmer, orfm dependencies)
+#     - DIAMOND
+#   
+#   • Databases (auto-downloaded or manual):
+#     - SingleM metapackage: Data/reference_dbs/S5.4.0.GTDB_r226.metapackage_*.smpkg.zb
+#     - DIAMOND database: Data/reference_dbs/DIAMOND/methane_master_db.dmnd
+#
+#   • Input data:
+#     - Paired-end shotgun reads: Data/raw_data/shotgun/<SAMPLE>_R1*.fastq.gz
+#                                                        <SAMPLE>_R2*.fastq.gz
+#
+# SETUP:
+#   1. Create conda environment:
+#      conda create -n quick_search -c bioconda -c conda-forge \
+#          python=3.10 singlem bbmap diamond
+#   
+#   2. Download SingleM database (15-20GB):
+#      conda activate quick_search
+#      singlem data --output-directory Data/reference_dbs/
+#   
+#   3. Copy DIAMOND database to Data/reference_dbs/DIAMOND/
+#
+# USAGE EXAMPLES:
+#   # Activate environment first
+#   conda activate quick_search
+#
+#   # Single sample
+#   bash Scripts/01_pipelines/quick_search.sh 53394
+#
+#   # Multiple samples
+#   bash Scripts/01_pipelines/quick_search.sh 53394 53395 53396
+#
+#   # From sample list file
+#   bash Scripts/01_pipelines/quick_search.sh --sample-list Config/samples.txt
+#
+#   # Auto-detect all samples
+#   bash Scripts/01_pipelines/quick_search.sh --auto
+#
+#   # Custom threads (default: 4)
+#   bash Scripts/01_pipelines/quick_search.sh --threads 16 53394
+#
+# HPC USAGE:
+#   sbatch Scripts/02_hpc/submit_quick_search.sbatch 53394
+#
+# OUTPUT:
+#   Data/processed_data/bbduk_cleaned/         - Quality-controlled reads
+#   Data/processed_data/singlem_output/        - Taxonomic profiles
+#   Data/functional_analysis/methane_genes/    - Gene search results
+#   Logs/                                      - Sample-specific logs
+#
+# AUTHOR: Jiayi
+# DATE: 2026-02-01
 ################################################################################
+
+# ============================================================================
+# Environment Check and Configuration
+# ============================================================================
+
+# Check if conda environment is activated
+if [[ "$CONDA_DEFAULT_ENV" != "quick_search" ]] && [[ -z "$SLURM_JOB_ID" ]]; then
+    echo "========================================================================"
+    echo "WARNING: Conda environment 'quick_search' is not activated"
+    echo "======================================================================="
+    echo ""
+    echo "Please activate the environment first:"
+    echo "  conda activate quick_search"
+    echo ""
+    echo "If you don't have the environment yet, create it:"
+    echo "  conda create -n quick_search -c bioconda -c conda-forge \\"
+    echo "      python=3.10 singlem bbmap diamond"
+    echo ""
+    exit 1
+fi
 
 # Default configuration
 THREADS=${THREADS:-4}              # Number of threads (can be set via environment variable)
+MAX_PARALLEL_SAMPLES=${MAX_PARALLEL_SAMPLES:-1}  # Number of samples to process in parallel
 CONDA_BASE="${CONDA_BASE:-/opt/anaconda3}"  # Conda installation path
 RAW_DATA_SUBDIR="${RAW_DATA_SUBDIR:-shotgun}"  # Subdirectory for raw data (shotgun or empty for root)
 
@@ -19,7 +102,7 @@ RAW_DATA_SUBDIR="${RAW_DATA_SUBDIR:-shotgun}"  # Subdirectory for raw data (shot
 if [ -z "$BASE_DIR" ]; then
     # Try to find the project root by looking for Scripts directory
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    BASE_DIR="$(dirname "$SCRIPT_DIR")"
+    BASE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 fi
 
 # Parse command line arguments
@@ -29,6 +112,20 @@ AUTO_DETECT=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        step0|--setup)
+              echo "==== 环境与依赖包准备（可自定义环境名） ===="
+              echo "1. 创建环境（任选名称）："
+              echo "   conda create -n <your_env_name> -c bioconda -c conda-forge \\"
+              echo "      python=3.10 singlem bbmap diamond"
+             echo "2. Activate environment:"
+              echo "   conda activate <your_env_name>"
+             echo "3. Download SingleM reference database:"
+              echo "   singlem data --output-directory Data/reference_dbs/"
+             echo "4. Place your DIAMOND database at: Data/reference_dbs/DIAMOND/"
+              echo ""
+             echo "After these steps, you can run this script."
+              exit 0
+              ;;
         --sample-list)
             SAMPLE_FILE="$2"
             shift 2
@@ -41,26 +138,78 @@ while [[ $# -gt 0 ]]; do
             THREADS="$2"
             shift 2
             ;;
+        --parallel)
+            MAX_PARALLEL_SAMPLES="$2"
+            shift 2
+            ;;
         --base-dir)
             BASE_DIR="$2"
             shift 2
             ;;
         --help|-h)
-            echo "Usage: bash quick_search.sh [OPTIONS] [SAMPLE_IDs...]"
-            echo ""
-            echo "Options:"
-            echo "  --sample-list FILE    Read sample IDs from file (one per line)"
-            echo "  --auto                Auto-detect all samples in raw_data directory"
-            echo "  --threads N           Number of threads (default: 4)"
-            echo "  --base-dir PATH       Base directory path (default: current)"
-            echo "  --help, -h            Show this help message"
-            echo ""
-            echo "Examples:"
-            echo "  bash quick_search.sh 53394                      # Single sample"
-            echo "  bash quick_search.sh 53394 53395 53396          # Multiple samples"
-            echo "  bash quick_search.sh --sample-list samples.txt  # From file"
-            echo "  bash quick_search.sh --auto                     # Auto-detect all"
-            echo "  bash quick_search.sh --threads 16 53394         # With 16 threads"
+            cat << 'EOF'
+========================================================================
+  Quick Metagenomic Search - Methane Gene Detection Pipeline
+========================================================================
+
+USAGE:
+  bash Scripts/01_pipelines/quick_search.sh [OPTIONS] [SAMPLE_IDs...]
+
+OPTIONS:
+
+    step0, --setup        Show recommended conda/package setup (custom env name allowed)
+    --sample-list FILE    Read sample IDs from file (one per line)
+    --auto                Auto-detect all samples in raw_data directory
+    --threads N           Number of threads (default: 4)
+    --base-dir PATH       Base directory path (default: auto-detect)
+    --help, -h            Show this help message
+
+EXAMPLES:
+  # Single sample
+  bash Scripts/01_pipelines/quick_search.sh 53394
+
+  # Multiple samples
+  bash Scripts/01_pipelines/quick_search.sh 53394 53395 53396
+
+  # From sample list file
+  bash Scripts/01_pipelines/quick_search.sh --sample-list Config/samples.txt
+
+  # Auto-detect all samples
+  bash Scripts/01_pipelines/quick_search.sh --auto
+
+  # Custom thread count
+  bash Scripts/01_pipelines/quick_search.sh --threads 16 53394
+
+  # HPC submission
+  sbatch Scripts/02_hpc/submit_quick_search.sbatch 53394
+
+REQUIREMENTS:
+  1. Conda environment: quick_search (must be activated)
+  2. Input data: Data/raw_data/shotgun/<SAMPLE>_R1*.fastq.gz
+  3. Databases:
+     - SingleM: Data/reference_dbs/S5.4.0.GTDB_r226.metapackage_*.smpkg.zb
+     - DIAMOND: Data/reference_dbs/DIAMOND/methane_master_db.dmnd
+
+SETUP (first time):
+  # Create environment
+  conda create -n quick_search -c bioconda -c conda-forge \\
+      python=3.10 singlem bbmap diamond
+
+  # Activate environment
+  conda activate quick_search
+
+  # Download SingleM database
+  singlem data --output-directory Data/reference_dbs/
+
+OUTPUT:
+  Data/processed_data/bbduk_cleaned/      - Quality-controlled reads
+  Data/processed_data/singlem_output/     - Taxonomic profiles
+  Data/functional_analysis/methane_genes/ - Gene detection results
+  Logs/                                   - Execution logs
+
+For more information, see: QUICK_SEARCH_USAGE.md
+========================================================================
+EOF
             exit 0
             ;;
         -*)
@@ -105,17 +254,88 @@ fi
 
 # Check if any samples provided
 if [ ${#SAMPLE_LIST[@]} -eq 0 ]; then
+    echo "========================================================================"
     echo "ERROR: No samples provided"
-    echo "Usage: bash quick_search.sh [OPTIONS] [SAMPLE_IDs...]"
+    echo "======================================================================="
+    echo ""
+    echo "Usage: bash Scripts/01_pipelines/quick_search.sh [OPTIONS] [SAMPLE_IDs...]"
+    echo ""
+    echo "Examples:"
+    echo "  bash Scripts/01_pipelines/quick_search.sh 53394"
+    echo "  bash Scripts/01_pipelines/quick_search.sh --auto"
+    echo "  bash Scripts/01_pipelines/quick_search.sh --sample-list Config/samples.txt"
+    echo ""
     echo "Use --help for more information"
     exit 1
 fi
 
-echo "========================================="
-echo "Processing ${#SAMPLE_LIST[@]} sample(s)"
+echo "========================================================================"
+echo "Quick Metagenomic Search Pipeline"
+echo "========================================================================"
+echo "Samples to process: ${#SAMPLE_LIST[@]}"
 echo "Threads: ${THREADS}"
 echo "Base directory: ${BASE_DIR}"
-echo "========================================="
+echo "Conda environment: ${CONDA_DEFAULT_ENV:-not detected}"
+echo "======================================================================="
+echo ""
+
+# ============================================================================
+# Prerequisites Check
+# ============================================================================
+
+echo "Checking prerequisites..."
+echo ""
+
+# Check required tools
+MISSING_TOOLS=()
+
+if ! command -v bbduk.sh &> /dev/null; then
+    MISSING_TOOLS+=("bbduk.sh (BBMap)")
+fi
+
+if ! command -v singlem &> /dev/null; then
+    MISSING_TOOLS+=("singlem")
+fi
+
+if ! command -v diamond &> /dev/null; then
+    MISSING_TOOLS+=("diamond")
+fi
+
+if ! command -v orfm &> /dev/null; then
+    MISSING_TOOLS+=("orfm (orfM)")
+fi
+
+if ! command -v hmmsearch &> /dev/null; then
+    MISSING_TOOLS+=("hmmsearch (HMMER)")
+fi
+
+
+if ! command -v bc &> /dev/null; then
+    MISSING_TOOLS+=("bc")
+fi
+
+if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+    echo "========================================================================"
+    echo "ERROR: Missing required tools"
+    echo "========================================================================"
+    echo ""
+    echo "The following tools are not found:"
+    for tool in "${MISSING_TOOLS[@]}"; do
+        echo "  - $tool"
+    done
+    echo ""
+    echo "Please install them in the quick_search environment:"
+    echo "  conda activate quick_search"
+    echo "  conda install -c bioconda -c conda-forge bbmap singlem diamond orfm hmmer"
+    echo "  # or use mamba for faster installs:"
+    echo "  # mamba install -n quick_search -c bioconda -c conda-forge bbmap singlem diamond orfm hmmer"
+    echo ""
+    exit 1
+fi
+
+echo "  ✓ bbduk.sh found: $(which bbduk.sh)"
+echo "  ✓ singlem found: $(singlem --version 2>&1 | head -1)"
+echo "  ✓ diamond found: $(diamond --version 2>&1 | head -1)"
 echo ""
 
 # Set paths
@@ -130,36 +350,6 @@ mkdir -p ${BBDUK_DIR}
 mkdir -p ${SINGLEM_DIR}
 mkdir -p ${DIAMOND_DIR}
 mkdir -p ${LOG_DIR}
-
-# Check for required external tools (some are required by SingleM/HMMER/orfM)
-MISSING_TOOLS=()
-if ! command -v bbduk.sh &> /dev/null; then
-    MISSING_TOOLS+=("bbduk.sh (BBMap)")
-fi
-if ! command -v singlem &> /dev/null; then
-    MISSING_TOOLS+=("singlem")
-fi
-if ! command -v diamond &> /dev/null; then
-    MISSING_TOOLS+=("diamond")
-fi
-if ! command -v orfm &> /dev/null; then
-    MISSING_TOOLS+=("orfm (orfM)")
-fi
-if ! command -v hmmsearch &> /dev/null; then
-    MISSING_TOOLS+=("hmmsearch (HMMER)")
-fi
-
-if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
-    echo "ERROR: Missing required tools"
-    echo "The following tools are not found:"
-    for tool in "${MISSING_TOOLS[@]}"; do
-        echo "  - $tool"
-    done
-    echo "Please install them in the quick_search environment:" 
-    echo "  conda activate quick_search"
-    echo "  conda install -c bioconda bbmap singlem diamond orfm hmmer"
-    exit 1
-fi
 
 # Set database paths - auto-detect or use environment variables
 if [ -z "$ADAPTERS" ]; then
@@ -178,6 +368,56 @@ fi
 SINGLEM_METAPACKAGE="${SINGLEM_METAPACKAGE:-${BASE_DIR}/Data/reference_dbs/S5.4.0.GTDB_r226.metapackage_20250331.smpkg.zb}"
 METHANE_DB="${METHANE_DB:-${BASE_DIR}/Data/reference_dbs/DIAMOND/methane_master_db}"
 
+# Check databases
+echo "Checking databases..."
+echo ""
+
+DB_MISSING=false
+
+# Check SingleM database
+if [ -e "$SINGLEM_METAPACKAGE" ] || [ -d "$SINGLEM_METAPACKAGE" ]; then
+    echo "  ✓ SingleM database found"
+else
+    echo "  ❌ SingleM database NOT found"
+    echo "     Expected: $SINGLEM_METAPACKAGE"
+    DB_MISSING=true
+fi
+
+# Check DIAMOND database
+if [ -f "${METHANE_DB}.dmnd" ]; then
+    echo "  ✓ DIAMOND database found: ${METHANE_DB}.dmnd"
+elif [ -f "${METHANE_DB}" ]; then
+    echo "  ✓ DIAMOND database found: ${METHANE_DB}"
+else
+    echo "  ❌ DIAMOND database NOT found"
+    echo "     Expected: ${METHANE_DB}.dmnd"
+    DB_MISSING=true
+fi
+
+if [ "$DB_MISSING" = true ]; then
+    echo ""
+    echo "========================================================================"
+    echo "ERROR: Required databases are missing"
+    echo "======================================================================="
+    echo ""
+    echo "To download SingleM database (15-20GB):"
+    echo "  conda activate quick_search"
+    echo "  singlem data --output-directory Data/reference_dbs/"
+    echo ""
+    echo "For DIAMOND database:"
+    echo "  Copy or create methane_master_db.dmnd in Data/reference_dbs/DIAMOND/"
+    echo ""
+    exit 1
+fi
+
+echo ""
+echo "All prerequisites checked - ready to start!"
+echo ""
+
+# ============================================================================
+# Sample Processing
+# ============================================================================
+
 ################################################################################
 # Function: Process single sample
 ################################################################################
@@ -188,12 +428,11 @@ process_sample() {
     LOG_FILE="${LOG_DIR}/${SAMPLE_ID}_quick_search.log"
 
     (
-    echo "========================================="
+    echo "========================================================================"
     echo "Processing Sample: ${SAMPLE_ID}"
+    echo "========================================================================"
     echo "Start time: $(date)"
-    echo "Base directory: ${BASE_DIR}"
-    echo "Raw data directory: ${RAW_DATA_DIR}"
-    echo "========================================="
+    echo "======================================================================="
     
     # Input files - support both naming patterns
     # Pattern 1: SAMPLE_R1.fastq.gz (standard)
@@ -222,8 +461,7 @@ process_sample() {
     DIAMOND_SUMMARY="${DIAMOND_DIR}/${SAMPLE_ID}_methane_summary.txt"
     
     # Log file
-    LOG_FILE="${LOG_DIR}/${SAMPLE_ID}_quick_search.log"
-    exec > >(tee -a "$LOG_FILE") 2>&1
+    :
 
 ################################################################################
 # STEP 1: BBduk Quality Control
@@ -271,8 +509,46 @@ echo "  R2: $(basename ${R2_RAW})"
 echo ""
 
 echo "Running BBduk..."
+
+# Wrapper to run BBduk safely and retry with constrained Java options if heap-init errors occur
+run_bbduk() {
+    local LOGFILE="${LOG_DIR}/${SAMPLE_ID}_bbduk.err"
+    # First attempt: capture both stdout and stderr
+    if bbduk.sh "$@" >"${LOGFILE}" 2>&1; then
+        return 0
+    fi
+
+    # Check for Java heap-init errors in combined output
+    if grep -q "Initial heap size set to a larger value than the maximum heap size" "${LOGFILE}" >/dev/null 2>&1; then
+        echo "WARNING: bbduk Java heap error detected; retrying with constrained Java options (JAVA_TOOL_OPTIONS)..."
+        # Retry using JAVA_TOOL_OPTIONS to override any internal JVM settings
+        if JAVA_TOOL_OPTIONS="-Xmx4g -Xms512m" bbduk.sh "$@" >"${LOGFILE}" 2>&1; then
+            return 0
+        fi
+
+        echo "WARNING: Retry with JAVA_TOOL_OPTIONS failed; attempting direct java invocation as last resort..."
+        # Attempt to find BBMap installation dir
+        BBMAP_BIN=$(which bbduk.sh 2>/dev/null || true)
+        BBMAP_DIR=""
+        if [ -n "${BBMAP_BIN}" ]; then
+            BBMAP_DIR="$(cd "$(dirname "${BBMAP_BIN}")/.." && pwd 2>/dev/null || echo "")"
+        fi
+        # If BBMAP_DIR still empty, fall back to conda location
+        if [ -z "${BBMAP_DIR}" ]; then
+            BBMAP_DIR="/opt/miniconda3/envs/quick_search/opt/bbmap-*/current/"
+        fi
+
+        # Direct java invocation; append stderr to log
+        java -ea -Xmx4g -Xms512m -cp "${BBMAP_DIR}" jgi.BBDuk "$@" >>"${LOGFILE}" 2>&1 || return 1
+        return 0
+    fi
+
+    # No specific heap-init error found; leave log for inspection and return failure
+    return 1
+}
+
 if [ -n "$ADAPTERS" ] && [ -f "$ADAPTERS" ]; then
-    bbduk.sh \
+    run_bbduk \
         in1=${R1_RAW} \
         in2=${R2_RAW} \
         out1=${R1_CLEAN} \
@@ -291,7 +567,7 @@ if [ -n "$ADAPTERS" ] && [ -f "$ADAPTERS" ]; then
         threads=${THREADS}
 else
     echo "WARNING: Adapters not found, running BBduk without adapter trimming"
-    bbduk.sh \
+    run_bbduk \
         in1=${R1_RAW} \
         in2=${R2_RAW} \
         out1=${R1_CLEAN} \
@@ -346,11 +622,12 @@ export TMPDIR="${SAMPLE_TMPDIR}"
 export PYTHONDONTWRITEBYTECODE=1
 
 echo "Using temporary directory: ${TMPDIR}"
-# Cap threads for SingleM/DIAMOND to reduce risk of segfaults/OOMs
-SINGLEM_THREADS=${SINGLEM_THREADS:-$(( THREADS < 4 ? THREADS : 4 ))}
+# Use more threads for SingleM/DIAMOND to improve performance
+# Only cap on low-memory systems
+SINGLEM_THREADS=${SINGLEM_THREADS:-${THREADS}}
 export OMP_NUM_THREADS=1
-# Increase stack size to reduce DIAMOND crashes on some systems
-ulimit -s 65536 || true
+# Try to increase stack size but ignore permission warnings
+ulimit -s 65536 2>/dev/null || true
 
 echo "Running SingleM pipe..."
 singlem pipe \
@@ -368,12 +645,12 @@ if [ $? -ne 0 ]; then
     mkdir -p "${DIAMOND_DIR}" 2>/dev/null || true
     DIAMOND_DIAG_ERR="${DIAMOND_DIR}/${SAMPLE_ID}_diamond_diag.err"
     set -o pipefail
-    gunzip -c ${R1_CLEAN} ${R2_CLEAN} | head -n 400000 | \
-        DIAMOND_TMPDIR="${SAMPLE_TMPDIR}" diamond blastx \
+    gunzip -c ${R1_CLEAN} ${R2_CLEAN} | head -n 400000 | diamond blastx \
         -d ${METHANE_DB} \
         -q - \
         -o /dev/null \
         --threads 1 \
+        --tmpdir "${SAMPLE_TMPDIR}" \
         --sensitive 2> "${DIAMOND_DIAG_ERR}" || echo "DIAMOND diagnostic exit code: $? (see ${DIAMOND_DIAG_ERR})"
     set +o pipefail
 
@@ -408,11 +685,10 @@ echo "STEP 3: Methane Gene Search with DIAMOND"
 echo "=========================================="
 
 echo "Searching for methane metabolism genes..."
-# Ensure DIAMOND uses a writable temporary directory
-export DIAMOND_TMPDIR="${SAMPLE_TMPDIR:-${TMPDIR}}"
+# Use a dedicated writable temp dir for DIAMOND
+DIAMOND_TMPDIR="${TMPDIR}/diamond_${SAMPLE_ID}_$$"
 mkdir -p "${DIAMOND_TMPDIR}" 2>/dev/null || true
 
-# Run DIAMOND (ensure it can use DIAMOND_TMPDIR)
 gunzip -c ${R1_CLEAN} ${R2_CLEAN} | \
     DIAMOND_TMPDIR="${DIAMOND_TMPDIR}" diamond blastx \
     -d ${METHANE_DB} \
@@ -425,6 +701,9 @@ gunzip -c ${R1_CLEAN} ${R2_CLEAN} | \
     --min-score 40 \
     --max-target-seqs 5 \
     --evalue 1e-5
+
+# Clean DIAMOND temp dir
+rm -rf "${DIAMOND_TMPDIR}" 2>/dev/null || true
 
 if [ $? -ne 0 ]; then
     echo "ERROR: DIAMOND search failed for sample ${SAMPLE_ID}"
@@ -547,11 +826,9 @@ echo ""
 # Get total mapped reads (from original DIAMOND output)
 TOTAL_MAPPED_READS=$(awk '{print $1}' ${DIAMOND_OUTPUT} | sort -u | wc -l)
 
-# Get total sequencing reads (from both R1 and R2)
-TOTAL_R1_READS=$(zcat ${R1_CLEAN} | wc -l | awk '{printf "%.4f", $1/4}')
-TOTAL_R2_READS=$(zcat ${R2_CLEAN} | wc -l | awk '{printf "%.4f", $1/4}')
-TOTAL_READS=$(awk -v a="${TOTAL_R1_READS}" -v b="${TOTAL_R2_READS}" 'BEGIN{printf "%.4f", a + b}')
-TOTAL_READS_MILLIONS=$(awk -v t="${TOTAL_READS}" 'BEGIN{printf "%.4f", t/1000000}')
+# Get total sequencing reads (from both R1 and R2) - optimized single pass
+TOTAL_READS=$(( $(zcat ${R1_CLEAN} ${R2_CLEAN} | wc -l) / 4 ))
+TOTAL_READS_MILLIONS=$(echo "scale=4; ${TOTAL_READS} / 1000000" | bc)
 
 echo "Normalization factors:"
 echo "  Total reads (R1+R2): ${TOTAL_READS}"
@@ -648,21 +925,56 @@ SUCCESS_COUNT=0
 FAIL_COUNT=0
 FAILED_SAMPLES=()
 
-for SAMPLE_ID in "${SAMPLE_LIST[@]}"; do
+# Parallel processing function
+if [ ${MAX_PARALLEL_SAMPLES} -gt 1 ]; then
+    echo "Processing ${#SAMPLE_LIST[@]} samples with ${MAX_PARALLEL_SAMPLES} parallel jobs..."
     echo ""
-    echo "################################################################################"
-    echo "# Processing sample ${SAMPLE_ID} ($(($SUCCESS_COUNT + $FAIL_COUNT + 1))/${#SAMPLE_LIST[@]})"
-    echo "################################################################################"
     
-    if process_sample "$SAMPLE_ID"; then
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        echo "✓ Sample ${SAMPLE_ID} completed successfully"
+    # Use GNU parallel or xargs for parallel processing
+    if command -v parallel &> /dev/null; then
+        export -f process_sample
+        export BASE_DIR THREADS RAW_DATA_DIR BBDUK_DIR SINGLEM_DIR DIAMOND_DIR LOG_DIR
+        export ADAPTERS SINGLEM_METAPACKAGE METHANE_DB SINGLEM_THREADS RAW_DATA_SUBDIR
+        
+        printf '%s\n' "${SAMPLE_LIST[@]}" | \
+            parallel -j ${MAX_PARALLEL_SAMPLES} --line-buffer \
+            'if process_sample {}; then echo "✓ {} completed"; else echo "✗ {} failed"; fi'
+        
+        # Count successes/failures from logs
+        for SAMPLE_ID in "${SAMPLE_LIST[@]}"; do
+            if grep -q "All steps completed successfully" "${LOG_DIR}/${SAMPLE_ID}_quick_search.log" 2>/dev/null; then
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+                FAILED_SAMPLES+=("$SAMPLE_ID")
+            fi
+        done
     else
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-        FAILED_SAMPLES+=("$SAMPLE_ID")
-        echo "✗ Sample ${SAMPLE_ID} failed"
+        echo "WARNING: GNU parallel not found, falling back to sequential processing"
+        echo "Install with: conda install -c conda-forge parallel"
+        echo ""
+        MAX_PARALLEL_SAMPLES=1
     fi
-done
+fi
+
+# Sequential processing (default or fallback)
+if [ ${MAX_PARALLEL_SAMPLES} -eq 1 ]; then
+    for SAMPLE_ID in "${SAMPLE_LIST[@]}"; do
+        echo ""
+        echo "################################################################################"
+        echo "# Processing sample ${SAMPLE_ID} ($(($SUCCESS_COUNT + $FAIL_COUNT + 1))/${#SAMPLE_LIST[@]})"
+        echo "################################################################################"
+        
+        if process_sample "$SAMPLE_ID"; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "✓ Sample ${SAMPLE_ID} completed successfully"
+        else
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+            FAILED_SAMPLES+=("$SAMPLE_ID")
+            echo "✗ Sample ${SAMPLE_ID} failed"
+        fi
+    done
+fi
 
 ################################################################################
 # Final Summary
@@ -671,9 +983,9 @@ MAIN_END_TIME=$(date +%s)
 TOTAL_ELAPSED=$((MAIN_END_TIME - MAIN_START_TIME))
 
 echo ""
-echo "################################################################################"
-echo "# PIPELINE SUMMARY"
-echo "################################################################################"
+echo "========================================================================"
+echo "PIPELINE SUMMARY"
+echo "========================================================================"
 echo "Total samples processed: ${#SAMPLE_LIST[@]}"
 echo "Successful: ${SUCCESS_COUNT}"
 echo "Failed: ${FAIL_COUNT}"
@@ -686,8 +998,16 @@ if [ ${FAIL_COUNT} -gt 0 ]; then
         echo "  - ${SAMPLE}"
     done
     echo ""
+    echo "Check logs in: ${LOG_DIR}/"
+    echo "========================================================================"
     exit 1
 fi
 
 echo "All samples completed successfully!"
-echo "################################################################################"
+echo ""
+echo "Output locations:"
+echo "  Quality-controlled reads: Data/processed_data/bbduk_cleaned/"
+echo "  Taxonomic profiles:       Data/processed_data/singlem_output/"
+echo "  Gene detection results:   Data/functional_analysis/methane_genes/"
+echo "  Logs:                     Logs/"
+echo "======================================================================="

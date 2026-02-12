@@ -260,7 +260,7 @@ export N_THREADS=${SLURM_CPUS}
 # Note: Set other environment variables (TRUNC_LEN_F, etc.) before running hpc_upload.sh
 # or the pipeline will use defaults
 export NON_INTERACTIVE=true
-bash Scripts/main.sh --non-interactive
+bash Scripts/01_pipelines/16S.sh --non-interactive
 
 echo "Pipeline completed at \$(date)"
 EOF

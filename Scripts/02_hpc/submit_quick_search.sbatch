@@ -3,7 +3,7 @@
 #SBATCH --output=quick_search_%j.out   # Standard output log (%j = job ID)
 #SBATCH --error=quick_search_%j.err    # Standard error log
 #SBATCH --ntasks=1                     # Number of tasks (processes)
-#SBATCH --cpus-per-task=8              # Number of CPU cores per task (reduced for stability)
+#SBATCH --cpus-per-task=16             # Number of CPU cores per task
 #SBATCH --mem=64G                      # Memory per node
 #SBATCH --time=24:00:00                # Time limit (24 hours)
 #SBATCH --partition=large_336          # Partition name
@@ -40,6 +40,7 @@ echo ""
 # Set environment variables for HPC
 export BASE_DIR="/home/jiayi/QIIME"
 export THREADS=$SLURM_CPUS_PER_TASK
+export MAX_PARALLEL_SAMPLES=1  # Set to 2-4 for parallel sample processing
 export CONDA_BASE="/home/jiayi/miniconda3"  # Adjust if your conda is elsewhere
 export RAW_DATA_SUBDIR="shotgun"  # Specify shotgun subdirectory
 
@@ -71,11 +72,69 @@ fi
 # Navigate to the scripts directory
 cd ${BASE_DIR}/Scripts
 
-# Run the quick search script with all arguments passed to sbatch
-echo "Running quick_search.sh with parameters: $@"
+# Parse arguments: support --sample-list and single sample ID
+SAMPLE_LIST_FILE=""
+SAMPLE_ARG=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --sample-list)
+            SAMPLE_LIST_FILE="$2"
+            shift 2
+            ;;
+        --auto)
+            SAMPLE_ARG="--auto"
+            shift
+            ;;
+        *)
+            SAMPLE_ARG="$1"
+            shift
+            ;;
+    esac
+done
+
+# If a sample list file was provided and we're not running as an array, auto-submit an array job
+if [[ -n "$SAMPLE_LIST_FILE" && -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+    if [ ! -f "$SAMPLE_LIST_FILE" ]; then
+        echo "ERROR: Sample list file not found: $SAMPLE_LIST_FILE"
+        exit 1
+    fi
+    NUM_TASKS=$(grep -cvE '^\s*#|^$' "$SAMPLE_LIST_FILE")
+    if [ $NUM_TASKS -eq 0 ]; then
+        echo "ERROR: Sample list file contains no samples: $SAMPLE_LIST_FILE"
+        exit 1
+    fi
+    echo "No SLURM_ARRAY_TASK_ID detected; submitting array job with $NUM_TASKS tasks..."
+    sbatch --array=1-$NUM_TASKS "$0" --sample-list "$SAMPLE_LIST_FILE"
+    # Exit current (non-array) submission after spawning array
+    exit 0
+fi
+
+# Determine which sample to run
+if [[ -n "$SAMPLE_LIST_FILE" ]]; then
+    # Running as an array task
+    SAMPLE_ID=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SAMPLE_LIST_FILE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ -z "$SAMPLE_ID" ]; then
+        echo "ERROR: No sample found for SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID}"
+        exit 1
+    fi
+elif [[ "$SAMPLE_ARG" == "--auto" ]]; then
+    SAMPLE_ID="--auto"
+elif [[ -n "$SAMPLE_ARG" ]]; then
+    SAMPLE_ID="$SAMPLE_ARG"
+else
+    echo "ERROR: No sample specified. Provide a sample ID or use --sample-list samples.txt"
+    exit 1
+fi
+
+# Run the quick search script for a single sample (or in auto mode)
+echo "Running quick_search.sh for sample: $SAMPLE_ID"
 echo ""
 
-bash quick_search.sh "$@"
+if [[ "$SAMPLE_ID" == "--auto" ]]; then
+    bash quick_search.sh --auto
+else
+    bash quick_search.sh "$SAMPLE_ID"
+fi
 
 # Capture exit status
 EXIT_STATUS=$?
